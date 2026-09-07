@@ -35,6 +35,7 @@
 - 仅在用户明确授权后提交、推送、创建 tag/Release 或部署；不提交 `.agents/plans/`、`SYNC.md`、凭据或生产配置。
 - 个人发布源固定为 `Tiantianr/TokenRouter`，镜像为 `ghcr.io/tiantianr/tokenrouter`；不得从 `TokenFlux/TokenRouter` 在线升级覆盖定制。
 - 默认仅发布 `linux/arm64` 镜像：前端与 Go 各构建一次，复用依赖及编译缓存；不构建其它架构、桌面二进制或 DockerHub 产物。
+- tag 仅调度 main 上的发布 workflow，手动 dispatch 也必须选择 main，再按目标 tag 检出源码；不得直接在不同 tag 的缓存作用域构建，避免下次发布仍然冷缓存。
 - 对应 main SHA 的 CI 与安全检查通过才能发布；tag 不重复完整应用矩阵。版本号必须先进入提交，tag、VERSION、镜像标签和 revision 必须一致；禁止移动已发布 tag、覆盖版本镜像或发布后自动回写 main。
 - ID3 只拉取已发布的固定版本及 digest，不现场编译；先备份并实际恢复验证，再只重建 TokenRouter 应用并验收。禁止重跑初次迁移、清空 Redis、覆盖生产数据库或误操作旧 Plus 服务。
 - 镜像版本禁止在容器内替换二进制或挂载 Docker socket。回退前判断迁移兼容性，不用旧数据库备份覆盖升级后的新账务。

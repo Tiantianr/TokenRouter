@@ -19,8 +19,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dispatch:
+    if: github.repository == 'Tiantianr/TokenRouter' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      # tag 缓存不能跨版本共享；只在 main 上运行实际构建，源码仍检出指定 tag。
+      - name: Dispatch release on the shared cache branch
+        run: gh workflow run release.yml --repo Tiantianr/TokenRouter --ref main -f "tag=$RELEASE_TAG"
+
   release:
-    if: github.repository == 'Tiantianr/TokenRouter'
+    if: github.repository == 'Tiantianr/TokenRouter' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     permissions:

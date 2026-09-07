@@ -12,9 +12,9 @@
 ## ARM64 流水线
 
 1. 推送 main，CI 和 Security Scan 验证该确切 SHA。发布脚本和升级来源变更运行针对性检查；已经完成的功能验证不因创建 tag 在本地完整重跑。
-2. `v*` tag 或现有 tag 的 workflow dispatch 触发 Personal ARM64 Release。只允许个人仓库执行，验证 VERSION/tag/SHA 和 main 祖先关系，不自动修改源码或回写版本。
+2. `v*` tag 只负责调度 main 上的 Personal ARM64 Release；手动 workflow dispatch 也必须选择 main，并传入现有 tag。实际构建检出目标 tag 而不是 main 最新源码，验证 VERSION/tag/SHA 和 main 祖先关系，只允许个人仓库执行，不自动修改源码或回写版本。
 3. 使用原生 ARM64 runner。Node 22、pnpm 9.15.9 容器构建一次前端，Go 1.27.0 容器只构建一次嵌入前端的 Linux ARM64 程序；具体工具链以 workflow 和 `backend/go.mod` 为准。
-4. 缓存包含 pnpm store、Go modules、Go build 和运行时镜像层。依赖缓存键包含工具链、manifest/lock 哈希；同依赖代内源码变化复用编译缓存，不跨依赖代恢复。冷缓存首次发布会明显慢于后续发布。
+4. 缓存包含 pnpm store、Go modules、Go build 和运行时镜像层，统一保存在 main 的 Actions 缓存作用域。GitHub 不允许不同 tag 直接互相恢复缓存，只设置 restore-keys 不足以跨 tag 复用，因此不能把实际构建重新移回 tag push job。依赖缓存键包含工具链、manifest/lock 哈希；同依赖代内源码变化复用编译缓存，不跨依赖代恢复。冷缓存首次发布会明显慢于后续发布。
 5. `Dockerfile.goreleaser` 仅包装预编译程序和运行时资源，不再次编译，不执行 GoReleaser 的跨平台矩阵。运行容器验证程序、ARM64 架构、PostgreSQL dump/psql 工具。
 6. 构建和 main 验证并行，发布前必须确认同 SHA 的 CI 与 Security Scan 成功。失败不发布，不通过跳过检查或现场编译绕过；tag 不重复触发这两个完整工作流。
 7. 只发布 `ghcr.io/tiantianr/tokenrouter:X.Y.Z` 与 GitHub Release。Release 附带 `release-manifest.json`，绑定版本、完整 SHA、平台、构建类型和镜像 digest；镜像必须公开且可由生产主机拉取。没有二进制归档、校验和安装包、amd64/macOS/Windows 或 DockerHub 产物。
