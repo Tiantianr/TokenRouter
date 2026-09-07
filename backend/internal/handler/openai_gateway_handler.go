@@ -526,25 +526,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		groupID := int64(0)
-		if apiKey.GroupID != nil {
-			groupID = *apiKey.GroupID
-		}
-		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
-			c.Request.Context(),
-			groupID,
-			previousResponseID,
-			subject.UserID,
-			apiKey.ID,
-		)
-		if ownershipErr != nil {
-			reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
-		}
-		if !owned {
-			reqLog.Warn("openai.request_validation_failed", zap.String("reason", "previous_response_owner_mismatch"))
-			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is not available for this user")
-			return
-		}
 	}
 	service.SetOpenAIHTTPResponseOwner(c, subject.UserID, apiKey.ID)
 
@@ -555,6 +536,29 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && decision.Blocked {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
 		return
+	}
+
+	// 先审核，再查询长期response归属；存储错误不能降格成普通无归属。
+	if previousResponseID != "" {
+		groupID := int64(0)
+		if apiKey.GroupID != nil {
+			groupID = *apiKey.GroupID
+		}
+		ownerUserID := apiKey.UserID
+		if apiKey.UserID == 0 && apiKey.User != nil {
+			ownerUserID = apiKey.User.ID
+		}
+		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(c.Request.Context(), groupID, previousResponseID, ownerUserID, apiKey.ID)
+		if h.handleOpenAIHistoryError(c, ownershipErr, false, false) {
+			return
+		}
+		if ownershipErr != nil {
+			reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
+		}
+		if !owned {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is not available for this user")
+			return
+		}
 	}
 
 	// 渠道模型 C 决定生图并发和账号端点能力，客户端模型 R 继续用于日志与会话语义。
@@ -635,6 +639,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	explicitSessionHash := h.gatewayService.GenerateExplicitSessionHash(c, sessionHashBody)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
+	if !h.prepareOpenAIHistory(c, apiKey, service.ContentModerationProtocolOpenAIResponses, body, sessionHash, false) {
+		return
+	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
@@ -679,7 +686,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			selectionCtx,
+			service.ContextWithOpenAIHistory(selectionCtx, c.Request.Context()),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,
@@ -694,6 +701,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if h.handleOpenAIHistoryError(c, err, false, streamStarted) {
 				return
 			}
 			reqLog.Warn("openai.account_select_failed",
@@ -769,7 +779,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, historyVetoed := h.acquireOpenAIHistoryAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if historyVetoed {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		if !acquired {
 			return
 		}
@@ -852,6 +866,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.handleOpenAIHistoryError(c, err, strings.Contains(c.Request.URL.Path, "messages"), streamStarted || c.Writer.Written()) {
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -1250,6 +1267,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 	sessionHash, promptCacheKey = resolveOpenAIMessagesMetadataSession(c, sessionHash, promptCacheKey, reqModel, body)
+	if !h.prepareOpenAIHistory(c, apiKey, service.ContentModerationProtocolAnthropicMessages, body, sessionHash, true) {
+		return
+	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatAnthropic) {
 		return
 	}
@@ -1299,6 +1319,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
+			if h.handleOpenAIHistoryError(c, err, true, streamStarted) {
+				return
+			}
 			reqLog.Warn("openai_messages.account_select_failed",
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -1338,7 +1361,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, historyVetoed := h.acquireOpenAIHistoryAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if historyVetoed {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		if !acquired {
 			return
 		}
@@ -1420,6 +1447,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.handleOpenAIHistoryError(c, err, strings.Contains(c.Request.URL.Path, "messages"), streamStarted || c.Writer.Written()) {
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_messages.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -2390,6 +2420,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
 	var cyberBlockedThisConn atomic.Bool
+	if requestPlatform == service.PlatformOpenAI {
+		if err := h.gatewayService.PrepareOpenAIHistoryRequest(c, service.ContentModerationProtocolOpenAIResponses, firstMessage, sessionHash); err != nil {
+			writeOpenAIHistoryWSError(c, ctx, wsConn, err, false)
+			return
+		}
+		ctx = service.ContextWithOpenAIHistory(ctx, c.Request.Context())
+	}
 	explicitSessionHash := h.gatewayService.GenerateExplicitSessionHash(c, firstMessage)
 	if explicitSessionHash != "" {
 		if err := h.ensureOpenAISessionIsolation(ctx, apiKey, subject.UserID, service.SessionIsolationSourceOpenAI, explicitSessionHash); err != nil {
@@ -2466,7 +2503,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			initialSchedulingCtx,
+			service.ContextWithOpenAIHistory(initialSchedulingCtx, ctx),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,
@@ -2479,6 +2516,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if writeOpenAIHistoryWSError(c, ctx, wsConn, err, false) {
+				return
+			}
 			reqLog.Warn("openai.websocket_account_select_failed",
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -2527,6 +2567,18 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			accountReleaseFunc = fastReleaseFunc
 		}
 		currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+		if err := h.gatewayService.ValidateOpenAIHistoryTurn(ctx, account); err != nil {
+			if currentAccountRelease != nil {
+				currentAccountRelease()
+				currentAccountRelease = nil
+			}
+			if errors.Is(err, service.ErrOpenAIExternalHistory) {
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+			writeOpenAIHistoryWSError(c, ctx, wsConn, err, false)
+			return
+		}
 		if err := h.gatewayService.BindStickySession(ctx, apiKey.GroupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
@@ -2574,6 +2626,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			maxReasoningEffortOverLimit = apiKey.Group.MaxReasoningEffortOverLimit
 			reasoningEffortMappings = apiKey.Group.ReasoningEffortMappings
 		}
+		var turnHistory atomic.Pointer[context.Context]
+		initialHistory := ctx
+		turnHistory.Store(&initialHistory)
 		hooks := &service.OpenAIWSIngressHooks{
 			ClientLifecycleContext:      clientLifecycleCtx,
 			InitialRequestModel:         reqModel,
@@ -2636,6 +2691,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				return routingModel, nil
 			},
+			HistoryContext: func() context.Context { return *turnHistory.Load() },
 			BeforeRequest: func(turn int, payload []byte, originalModel, _ string) ([]byte, error) {
 				if turn == 1 {
 					return payload, nil
@@ -2663,6 +2719,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					writeContentModerationWSError(ctx, wsConn, decision)
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, decision.Message, nil)
 				}
+				// 分组边界先于账号预占，拒绝跨组时不能给当前账号新增归属。
 				if payloadPreviousResponseID != "" {
 					previousResponseHash := service.DeriveSessionHashFromSeed(payloadPreviousResponseID)
 					if err := h.ensureOpenAISessionIsolation(ctx, apiKey, subject.UserID, service.SessionIsolationSourceOpenAIPreviousResponse, previousResponseHash); err != nil {
@@ -2670,11 +2727,28 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, openAIWSSessionIsolationCloseReason(err), err)
 					}
 				}
-				if explicitHash := h.gatewayService.GenerateExplicitSessionHash(c, payload); explicitHash != "" {
+				isolationContext := c.Copy()
+				if explicitHash := h.gatewayService.GenerateExplicitSessionHash(isolationContext, payload); explicitHash != "" {
 					if err := h.ensureOpenAISessionIsolation(ctx, apiKey, subject.UserID, service.SessionIsolationSourceOpenAI, explicitHash); err != nil {
 						writeSessionIsolationWSError(ctx, wsConn, err)
 						return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, openAIWSSessionIsolationCloseReason(err), err)
 					}
+				}
+				if requestPlatform == service.PlatformOpenAI {
+					turnContext := c.Copy()
+					turnHash := sessionHash
+					if explicitHash := h.gatewayService.GenerateExplicitSessionHash(turnContext, payload); explicitHash != "" {
+						turnHash = explicitHash
+					}
+					if err := h.gatewayService.PrepareOpenAIHistoryRequest(turnContext, service.ContentModerationProtocolOpenAIResponses, payload, turnHash); err != nil {
+						return payload, err
+					}
+					turnHistoryCtx := turnContext.Request.Context()
+					if err := h.gatewayService.ValidateOpenAIHistoryTurn(turnHistoryCtx, account); err != nil {
+						writeOpenAIHistoryWSError(c, ctx, wsConn, err, true)
+						return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "conversation admission rejected", err)
+					}
+					turnHistory.Store(&turnHistoryCtx)
 				}
 				return payload, nil
 			},
@@ -2838,6 +2912,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
 			if service.IsOpenAIWSSessionPreemptedError(err) {
+				return
+			}
+			// 重试必须携带当前轮归属，不能复用首轮的无历史准入状态。
+			ctx = service.ContextWithOpenAIHistory(ctx, hooks.HistoryContext())
+			if _, _, _, _, localHistoryError := openAIHistoryErrorDetails(err); localHistoryError {
+				if _, alreadyWritten := c.Get(opsOpenAIHistoryErrorKey); !alreadyWritten {
+					writeOpenAIHistoryWSError(c, ctx, wsConn, err, true)
+				}
 				return
 			}
 			var failoverErr *service.UpstreamFailoverError

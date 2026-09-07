@@ -2099,6 +2099,14 @@
         </div>
       </div>
 
+      <div v-if="account?.platform === 'openai' && account?.type === 'oauth' && !account?.parent_account_id" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2">
+          <input v-model="rejectExternalHistory" data-testid="edit-reject-external-history" type="checkbox" class="rounded" />
+          {{ t('admin.accounts.rejectExternalHistory') }}
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.rejectExternalHistoryHint') }}</p>
+      </div>
+
       <!-- OAuth/COSY TLS 指纹伪装 -->
       <div
         v-if="showStandaloneTLSFingerprint"
@@ -3258,6 +3266,7 @@ const umqModeOptions = computed(() => [
   { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
 ])
 const tlsFingerprintEnabled = ref(false)
+const rejectExternalHistory = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 const tlsFingerprintRouterId = ref<number | null>(null)
@@ -3849,6 +3858,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
+    rejectExternalHistory.value = extra?.openai_oauth_reject_external_history === true
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
@@ -5364,6 +5374,9 @@ const handleSubmit = async () => {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
+      if (props.account.type === 'oauth' && !props.account.parent_account_id) {
+        newExtra.openai_oauth_reject_external_history = rejectExternalHistory.value
+      }
       if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
         newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
         newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)

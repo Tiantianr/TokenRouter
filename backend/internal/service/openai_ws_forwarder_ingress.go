@@ -229,6 +229,22 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 		}
+		rawType := strings.TrimSpace(gjson.GetBytes(trimmed, "type").String())
+		if turn > 1 && (rawType == "" || rawType == "response.create") && hooks != nil && hooks.BeforeRequest != nil {
+			// 在提示替换、身份收敛和兼容转换之前审核并分类本轮原始输入。
+			model := strings.TrimSpace(gjson.GetBytes(trimmed, "model").String())
+			if model == "" {
+				model = ingressSessionOriginalModel
+			}
+			previousID := strings.TrimSpace(gjson.GetBytes(trimmed, "previous_response_id").String())
+			updated, err := hooks.BeforeRequest(turn, trimmed, model, previousID)
+			if err != nil {
+				return openAIWSClientPayload{}, err
+			}
+			if len(updated) > 0 {
+				trimmed = updated
+			}
+		}
 		if applyUserPromptReplacement {
 			// 后续 response.create 帧先执行用户提示词替换，再进入模型归一化、图片桥接和 OpenAI Fast Policy。
 			trimmed = s.ApplyUserPromptReplacement(ctx, trimmed, "openai_responses")
@@ -481,6 +497,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	writeClientMessage := func(message []byte) error {
+		if err := s.persistOpenAIHistoryResponsePayload(openAIHistoryTurnContext(ctx, hooks), account, message); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusInternalError, "conversation ownership unavailable", err)
+		}
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		message = restoreCodexToolNamesFromContext(c, message)
@@ -571,17 +590,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			turnStartedAt := time.Now()
 			if hooks != nil && hooks.TurnStarted != nil {
 				hooks.TurnStarted(turn, turnStartedAt)
-			}
-			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
-				updatedPayload, err := hooks.BeforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel, currentBridgePayload.previousResponseID)
-				if err != nil {
-					return err
-				}
-				if len(updatedPayload) > 0 {
-					currentBridgePayload.payloadRaw = updatedPayload
-					currentBridgePayload.payloadBytes = len(updatedPayload)
-					currentBridgePayload.previousResponseID = strings.TrimSpace(gjson.GetBytes(updatedPayload, "previous_response_id").String())
-				}
 			}
 			if hooks != nil && hooks.BeforeTurn != nil {
 				if err := hooks.BeforeTurn(turn); err != nil {
@@ -1466,17 +1474,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnStartedAt := time.Now()
 		if hooks != nil && hooks.TurnStarted != nil {
 			hooks.TurnStarted(turn, turnStartedAt)
-		}
-		if turn > 1 && !skipBeforeTurn && hooks != nil && hooks.BeforeRequest != nil {
-			currentPreviousResponseID := openAIWSPayloadStringFromRaw(currentPayload, "previous_response_id")
-			updatedPayload, err := hooks.BeforeRequest(turn, currentPayload, currentOriginalModel, currentPreviousResponseID)
-			if err != nil {
-				return err
-			}
-			if len(updatedPayload) > 0 {
-				currentPayload = updatedPayload
-				currentPayloadBytes = len(updatedPayload)
-			}
 		}
 		if !skipBeforeTurn && hooks != nil && hooks.BeforeTurn != nil {
 			if err := hooks.BeforeTurn(turn); err != nil {

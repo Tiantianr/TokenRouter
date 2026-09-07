@@ -1312,6 +1312,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if !accountSupportsOpenAICapabilities(account, req.RequiredCapability, req.RequiredImageCapability) {
 		return false, "capability_mismatch"
 	}
+	if reason := openAIHistoryCandidateFailureReason(ctx, account); reason != "" {
+		return false, reason
+	}
 	return true, ""
 }
 
@@ -1824,7 +1827,32 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRouting(
 	requireCompact bool,
 	platform string,
 	previousResponseCanMove bool,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+) (selectionResult *AccountSelectionResult, scheduleDecision OpenAIAccountScheduleDecision, selectionErr error) {
+	// 所有调度器及代理隔离回退都经过同一最终准入；失败必须释放已获取槽位。
+	defer func() {
+		if selectionErr == nil && selectionResult != nil && selectionResult.Account != nil {
+			selectionErr = s.CommitOpenAIHistoryRoute(ctx, selectionResult.Account)
+			if selectionErr != nil {
+				rejectedID := selectionResult.Account.ID
+				if selectionResult.ReleaseFunc != nil {
+					selectionResult.ReleaseFunc()
+				}
+				selectionResult = nil
+				if errors.Is(selectionErr, ErrOpenAIExternalHistory) {
+					nextExcluded := cloneExcludedAccountIDs(excludedIDs)
+					if nextExcluded == nil {
+						nextExcluded = make(map[int64]struct{})
+					}
+					if _, repeated := nextExcluded[rejectedID]; !repeated {
+						nextExcluded[rejectedID] = struct{}{}
+						selectionResult, scheduleDecision, selectionErr = s.selectAccountWithSchedulerForRouting(ctx, groupID, previousResponseID, sessionHash, requestedModel, routingModel, nextExcluded, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove)
+					}
+				}
+			}
+		} else {
+			selectionErr = openAIHistorySelectionError(ctx, selectionErr)
+		}
+	}()
 	originalGroupID := derefGroupID(groupID)
 	resolvedCtx, resolvedGroupID, err := s.resolveOpenAISchedulerGroup(ctx, groupID)
 	if err != nil {

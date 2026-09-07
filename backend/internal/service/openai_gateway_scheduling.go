@@ -287,7 +287,12 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 	requestedModel string,
 	requiredCapability OpenAIEndpointCapability,
 	platform string,
-) (*Account, error) {
+) (account *Account, selectionErr error) {
+	defer func() {
+		if selectionErr != nil || account == nil {
+			selectionErr = openAIHistorySelectionError(ctx, selectionErr)
+		}
+	}()
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	return s.selectAccountForModelWithExclusions(
 		ctx,
@@ -463,7 +468,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if requireCompact && openAICompactSupportTier(account) == 0 {
 		return "compact_unsupported"
 	}
-	return ""
+	return openAIHistoryCandidateFailureReason(ctx, account)
 }
 
 type openAIQuotaAutoPauseDecision struct {

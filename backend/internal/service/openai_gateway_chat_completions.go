@@ -570,6 +570,9 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	acc.SupplementResponseOutput(finalResponse)
 
 	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
+	if err := s.persistOpenAIHistoryResponse(c.Request.Context(), account, finalResponse.ID, finalResponse.Status == "completed"); err != nil {
+		return nil, err
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -726,6 +729,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		observeOpenAIServiceTierInContext(c, []byte(payload), event.Type)
 		refusalDetector.ObservePayload([]byte(payload))
+		if err := s.persistOpenAIHistoryResponsePayload(c.Request.Context(), account, []byte(payload)); err != nil {
+			streamNonFailoverErr = err
+			return true
+		}
 
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
 		if isTerminalEvent {

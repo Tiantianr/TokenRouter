@@ -685,6 +685,11 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	}
 
 	accountID, err := store.GetResponseAccount(ctx, derefGroupID(groupID), responseID)
+	if state := openAIHistoryFromContext(ctx); state != nil && state.previousID == responseID {
+		if durableID := openAIHistoryStickyAccountID(ctx, state.sessionHash); durableID > 0 {
+			accountID, err = durableID, nil
+		}
+	}
 	if err != nil || accountID <= 0 {
 		return 0, nil, "", nil
 	}
@@ -697,6 +702,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	account, err := s.getSchedulableAccount(ctx, accountID)
 	if err != nil || account == nil {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
+		return 0, nil, "", nil
+	}
+	if openAIHistoryCandidateFailureReason(ctx, account) != "" {
 		return 0, nil, "", nil
 	}
 	// 非 WSv2 场景（如 force_http/全局关闭）不应使用 previous_response_id 粘连，

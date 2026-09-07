@@ -23,6 +23,33 @@ func newSchedulerCacheUnit(t *testing.T) *schedulerCache {
 	return cache
 }
 
+func TestSchedulerCacheOpenAIHistoryPolicySurvivesProjection(t *testing.T) {
+	ctx := context.Background()
+	for _, value := range []any{nil, true, false, "false"} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			cache := newSchedulerCacheUnit(t)
+			a := service.Account{ID: 901, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{service.OpenAIOAuthRejectExternalHistoryKey: value}}
+			bucket := service.SchedulerBucket{GroupID: 7, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+			token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+			require.NoError(t, err)
+			require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{a}))
+			accounts, hit, err := cache.GetSnapshot(ctx, bucket)
+			require.NoError(t, err)
+			require.True(t, hit)
+			require.Len(t, accounts, 1)
+			require.Equal(t, value == true, accounts[0].IsOpenAIOAuthRejectExternalHistoryEnabled())
+			metadata := buildSchedulerMetadataAccount(a)
+			delete(metadata.Extra, service.OpenAIOAuthRejectExternalHistoryKey)
+			encoded, err := json.Marshal(metadata)
+			require.NoError(t, err)
+			require.NoError(t, cache.rdb.Set(ctx, schedulerAccountMetaKey("901"), encoded, 0).Err())
+			_, hit, err = cache.GetSnapshot(ctx, bucket)
+			require.NoError(t, err)
+			require.False(t, hit, "旧metadata不能丢失明确配置，必须回源重建")
+		})
+	}
+}
+
 func newSchedulerCacheUnitWithRedis(t *testing.T) (*schedulerCache, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)

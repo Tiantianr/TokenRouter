@@ -1120,6 +1120,11 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		status := c.Writer.Status()
+		if _, localHistoryError := c.Get(opsOpenAIHistoryErrorKey); localHistoryError && status < 400 {
+			// HTTP 200/101 不得掩盖本地历史策略的逻辑失败状态。
+			logOpsStreamError(c, ops, status)
+			return
+		}
 		body := w.capturedBytes()
 		parsed := parseOpsErrorResponse(body)
 		if !parsed.StreamFailure {
@@ -1143,7 +1148,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		// Skip logging if a passthrough rule with skip_monitoring=true matched.
-		if shouldSkipFinalOpsFailure(c) {
+		if !isOpsOpenAIHistoryRejection(c, parsed.Message) && shouldSkipFinalOpsFailure(c) {
 			return
 		}
 
@@ -1425,7 +1430,7 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 
 func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus int, streamErr service.OpsStreamError) {
 	// 命中 skip_monitoring=true 透传规则的请求跳过落库，与其它分支一致。
-	if streamErr.SkipMonitoring || (streamErr.Turn == 0 && shouldSkipFinalOpsFailure(c)) {
+	if !isOpsOpenAIHistoryRejection(c, streamErr.Message) && (streamErr.SkipMonitoring || (streamErr.Turn == 0 && shouldSkipFinalOpsFailure(c))) {
 		return
 	}
 
@@ -1536,9 +1541,10 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
 	applyOpsUpstreamFieldsFromContext(c, entry)
-	if streamErr.Turn > 0 {
+	if streamErr.Turn > 0 && !isOpsOpenAIHistoryRejection(c, streamErr.Message) {
 		applyOpsStreamErrorSnapshot(entry, streamErr)
 	}
+	suppressOpsUpstreamAttributionForLocalModelConfiguration(c, entry)
 
 	if apiKey != nil {
 		entry.APIKeyID = &apiKey.ID
@@ -1718,7 +1724,11 @@ func applyOpsUpstreamErrorEvents(entry *service.OpsInsertErrorLogInput, events [
 }
 
 func suppressOpsUpstreamAttributionForLocalModelConfiguration(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
-	if entry == nil || !service.HasOpsClientBusinessLimited(c) || service.OpsClientBusinessLimitedReason(c) != service.OpsClientBusinessLimitedReasonLocalModelConfiguration {
+	if entry == nil {
+		return
+	}
+	localModelConfiguration := service.HasOpsClientBusinessLimited(c) && service.OpsClientBusinessLimitedReason(c) == service.OpsClientBusinessLimitedReasonLocalModelConfiguration
+	if !localModelConfiguration && !isOpsOpenAIHistoryRejection(c, entry.ErrorMessage) {
 		return
 	}
 	entry.AccountID = nil
@@ -2195,6 +2205,9 @@ func classifyOpsSeverity(errType string, status int) string {
 
 // classifyOpsErrorLog 汇总上游错误上下文与本地路由标记，生成统一的 Ops 统计口径。
 func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status int) (phase string, isBusinessLimited bool, errorOwner string, errorSource string) {
+	if isOpsOpenAIHistoryRejection(c, message) {
+		return "routing", true, "platform", "gateway"
+	}
 	phase = classifyOpsPhase(errType, message, code)
 	routingCapacityLimited := isOpsRoutingCapacityLimited(c)
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)

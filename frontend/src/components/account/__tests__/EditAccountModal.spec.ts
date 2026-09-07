@@ -732,6 +732,26 @@ describe('EditAccountModal', () => {
     )
   })
 
+  it.each([undefined, true, false])('preserves history policy %s when editing OAuth accounts', async (value) => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.extra = value === undefined ? {} : { openai_oauth_reject_external_history: value }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-reject-external-history"]').element.checked).toBe(value === true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_reject_external_history).toBe(value === true)
+  })
+
+  it('does not offer a separate history policy for a shadow account', () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.parent_account_id = 99
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-reject-external-history"]').exists()).toBe(false)
+  })
+
   it('submits the Codex namespace flatten toggle when switched on', async () => {
     const account = buildAccount()
     account.type = 'oauth'

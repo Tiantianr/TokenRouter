@@ -589,6 +589,10 @@ func validateGeminiThirdPartyBaseURL(account *Account) error {
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra := maps.Clone(input.Extra)
+	accountExtra, historyErr := normalizeOpenAIHistoryExtra(input.Platform, input.Type, accountExtra, nil)
+	if historyErr != nil {
+		return nil, historyErr
+	}
 	DiscardDeprecatedAccountExtra(accountExtra)
 	if err := NormalizeUpstreamUsageExtra(accountExtra); err != nil {
 		return nil, err
@@ -683,6 +687,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	originalQoderPAT := strings.TrimSpace(account.GetCredential("pat"))
 	normalizedExtra, shouldReplaceExtra := NormalizeDeprecatedAccountExtraUpdate(input.Extra)
 	if shouldReplaceExtra {
+		normalizedExtra, err = normalizeOpenAIHistoryExtra(account.Platform, account.Type, normalizedExtra, account)
+		if err != nil {
+			return nil, err
+		}
 		if isOpenAIAPIKeyAccount(account) && hasOpenAIConfigurationPatch(nil, normalizedExtra) {
 			if err := normalizeOpenAIAPIKeyConfigurationPatch(nil, normalizedExtra); err != nil {
 				return nil, err
@@ -1025,6 +1033,23 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	openAISettings, err := normalizeBulkOpenAISettings(input)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateOpenAIHistoryExtra(input.Extra); err != nil {
+		return nil, err
+	}
+	if _, historyPatch := input.Extra[OpenAIOAuthRejectExternalHistoryKey]; historyPatch {
+		targets, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		if len(targets) != len(input.AccountIDs) {
+			return nil, infraerrors.BadRequest("OPENAI_EXTERNAL_HISTORY_TARGET", "history policy requires existing OAuth credential owners")
+		}
+		for _, target := range targets {
+			if target == nil || !target.IsOpenAIOAuth() || target.IsCredentialShadow() {
+				return nil, infraerrors.BadRequest("OPENAI_EXTERNAL_HISTORY_TARGET", "history policy requires OAuth credential owners; shadows inherit their parent")
+			}
+		}
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck

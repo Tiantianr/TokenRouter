@@ -506,6 +506,18 @@ describe('CreateAccountModal OpenAI account options', () => {
     await flushPromises()
 
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra).not.toHaveProperty('codex_fingerprint_mode')
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_oauth_reject_external_history).toBe(false)
+  })
+
+  it('saves an explicit external-history opt-in for OAuth imports', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="create-reject-external-history"]').setValue(true)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('History opt-in')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_oauth_reject_external_history).toBe(true)
   })
 
   it('persists an explicit Codex fingerprint convergence mode for OAuth imports', async () => {

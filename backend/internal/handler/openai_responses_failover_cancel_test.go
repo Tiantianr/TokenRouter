@@ -98,7 +98,7 @@ func (u *openAIResponsesFailoverCancelUpstream) calls() []int64 {
 	return append([]int64(nil), u.accountIDs...)
 }
 
-func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUpstream) *OpenAIGatewayHandler {
+func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUpstream, repos ...service.AccountRepository) *OpenAIGatewayHandler {
 	t.Helper()
 	proxyID := int64(11)
 	accounts := []service.Account{
@@ -135,7 +135,14 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Credentials: map[string]any{"access_token": "token-2"},
 		},
 	}
-	accountRepo := openAIResponsesFailoverAccountRepo{accounts: accounts}
+	accountRepo := withOpenAIHistoryTestRepository(openAIResponsesFailoverAccountRepo{accounts: accounts})
+	if len(repos) > 0 {
+		accountRepo = repos[0]
+	}
+	var gatewayCache service.GatewayCache
+	if historyRepo, ok := accountRepo.(*openAIHistoryHandlerRepository); ok {
+		gatewayCache = historyRepo.cache
+	}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	gatewayService := service.NewOpenAIGatewayService(
 		accountRepo,
@@ -144,7 +151,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 		nil,
 		nil,
 		nil,
-		nil,
+		gatewayCache,
 		cfg,
 		nil,
 		nil,

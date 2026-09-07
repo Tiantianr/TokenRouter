@@ -139,6 +139,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
+	if !h.prepareOpenAIHistory(c, apiKey, service.ContentModerationProtocolOpenAIChat, body, sessionHash, false) {
+		return
+	}
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 	explicitSessionHash := h.gatewayService.GenerateExplicitSessionHash(c, body)
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatChat) {
@@ -180,6 +183,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				reqLog.Info("openai_chat_completions.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
+			if h.handleOpenAIHistoryError(c, err, false, streamStarted) {
+				return
+			}
 			reqLog.Warn("openai_chat_completions.account_select_failed",
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -218,7 +224,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, historyVetoed := h.acquireOpenAIHistoryAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if historyVetoed {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		if !acquired {
 			return
 		}
@@ -301,6 +311,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.handleOpenAIHistoryError(c, err, strings.Contains(c.Request.URL.Path, "messages"), streamStarted || c.Writer.Written()) {
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_chat_completions.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),

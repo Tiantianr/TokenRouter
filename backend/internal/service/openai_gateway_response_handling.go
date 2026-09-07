@@ -521,6 +521,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
+			if err := s.persistOpenAIHistoryResponsePayload(ctx, account, dataBytes); err != nil {
+				streamEarlyErr = err
+				return
+			}
 			forceFlushFailedEvent := false
 			if !capacityFailoverSuppressedLogged && account != nil && account.Platform == PlatformOpenAI &&
 				(eventType == "error" || eventType == "response.failed") &&
@@ -1360,6 +1364,15 @@ func (s *OpenAIGatewayService) ValidateOpenAIHTTPResponseOwner(
 	if s == nil || strings.TrimSpace(responseID) == "" || userID <= 0 || apiKeyID <= 0 {
 		return false, nil
 	}
+	if s.conversationBindingRepository() != nil {
+		binding, err := s.lookupOpenAIHistoryBinding(ctx, userID, groupID, "response", responseID)
+		if err != nil {
+			return false, fmt.Errorf("%w: %w", ErrOpenAIHistoryUnavailable, err)
+		}
+		if binding != nil {
+			return binding.Valid && binding.Confirmed && binding.UserID == userID, nil
+		}
+	}
 	ownerUserID, ownerAPIKeyID, found, err := s.getOpenAIWSStateStore().GetHTTPResponseOwner(ctx, groupID, responseID)
 	if err != nil || !found {
 		return false, err
@@ -1570,6 +1583,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
+	if err := s.persistOpenAIHistoryResponsePayload(c.Request.Context(), account, body); err != nil {
+		return nil, err
+	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -1701,6 +1717,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
+	}
+	if err := s.persistOpenAIHistoryResponsePayload(c.Request.Context(), account, body); err != nil {
+		return nil, err
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)

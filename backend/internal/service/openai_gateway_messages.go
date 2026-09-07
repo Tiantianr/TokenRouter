@@ -673,6 +673,9 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	acc.SupplementResponseOutput(finalResponse)
 
 	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, originalModel)
+	if err := s.persistOpenAIHistoryResponse(c.Request.Context(), account, finalResponse.ID, finalResponse.Status == "completed"); err != nil {
+		return nil, err
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -1015,6 +1018,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 		eventType := strings.TrimSpace(event.Type)
+		if err := s.persistOpenAIHistoryResponsePayload(c.Request.Context(), account, []byte(payload)); err != nil {
+			streamNonFailoverErr = err
+			return true
+		}
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
 		if isTerminalEvent {

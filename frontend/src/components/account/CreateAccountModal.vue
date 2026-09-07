@@ -1352,6 +1352,14 @@
         </div>
       </div>
 
+      <div v-if="form.platform === 'openai' && accountCategory === 'oauth-based'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2">
+          <input v-model="rejectExternalHistory" data-testid="create-reject-external-history" type="checkbox" class="rounded" />
+          {{ t('admin.accounts.rejectExternalHistory') }}
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.rejectExternalHistoryHint') }}</p>
+      </div>
+
       <!-- Qoder COSY TLS 指纹伪装 -->
       <div
         v-if="form.platform === 'qoder'"
@@ -4856,6 +4864,8 @@ const umqModeOptions = computed(() => [
   { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
 ])
 const tlsFingerprintEnabled = ref(false)
+// 默认关闭，避免升级后自动限制存量会话；启用后才要求已确认的历史归属。
+const rejectExternalHistory = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 const tlsFingerprintRouterId = ref<number | null>(null)
@@ -5959,6 +5969,7 @@ const resetForm = () => {
   rpmStickyBuffer.value = null
   userMsgQueueMode.value = ''
   tlsFingerprintEnabled.value = false
+  rejectExternalHistory.value = false
   tlsFingerprintProfileId.value = null
   tlsFingerprintRouterId.value = null
   sessionIdMaskingEnabled.value = false
@@ -6030,6 +6041,7 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
       : undefined
   const extra: Record<string, unknown> = { ...(defaultsExtra || {}), ...(base || {}) }
   if (accountCategory.value === 'oauth-based') {
+    extra.openai_oauth_reject_external_history = rejectExternalHistory.value
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
   } else if (accountCategory.value === 'apikey') {

@@ -1,6 +1,8 @@
 export default {
 // Accounts Management
     accounts: {
+      rejectExternalHistory: '拒绝外部历史请求',
+      rejectExternalHistoryHint: '默认关闭。开启后仅接续经成功响应确认、属于该凭据账号的历史；影子账号继承母账号。与分组会话隔离独立生效，关闭不绕过分组权限或内容审核。',
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',

@@ -124,6 +124,10 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && decision.Blocked {
+		h.anthropicErrorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	channelMappedModel := channelMapping.MappedModel
@@ -146,6 +150,9 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	}
 
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
+	if !h.prepareOpenAIHistory(c, apiKey, service.ContentModerationProtocolAnthropicMessages, body, sessionHash, true, true) {
+		return
+	}
 	// count_tokens 不计费：显式豁免利润门，避免高倍率账号池被门排除。
 	account, err := h.gatewayService.SelectAccountForTokenCount(
 		c.Request.Context(),
@@ -158,6 +165,9 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	if err != nil {
 		reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
+		if h.handleOpenAIHistoryError(c, err, true, false) {
+			return
+		}
 		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, accountLayerModel, reqModel)
 		if !cls.ModelNotFound {
 			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)

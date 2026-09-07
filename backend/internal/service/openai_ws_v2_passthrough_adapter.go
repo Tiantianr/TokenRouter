@@ -31,6 +31,7 @@ type openAIWSClientFrameConn struct {
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
 	restoreToolNames     func([]byte) []byte
+	beforeWrite          func([]byte) error
 }
 
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
@@ -236,17 +237,17 @@ type openAIWSPassthroughUsageMeta struct {
 	reasoningEffort          atomic.Pointer[string]
 	requestedReasoningEffort atomic.Pointer[string]
 
-	// 仅在 client->upstream filter goroutine 中读写；Load 侧通过上方原子指针同步。
-	sessionRequestModel string
+	// 客户端更新模型时，上游响应也会读取；与档位字段一样使用原子快照。
+	sessionRequestModel atomic.Pointer[string]
 }
 
 func newOpenAIWSPassthroughUsageMeta(initialRequestModel string, firstFrame []byte) *openAIWSPassthroughUsageMeta {
-	meta := &openAIWSPassthroughUsageMeta{
-		sessionRequestModel: strings.TrimSpace(initialRequestModel),
+	meta := &openAIWSPassthroughUsageMeta{}
+	model := strings.TrimSpace(initialRequestModel)
+	if model == "" {
+		model = openAIWSPassthroughRequestModelForFrame(firstFrame)
 	}
-	if meta.sessionRequestModel == "" {
-		meta.sessionRequestModel = openAIWSPassthroughRequestModelForFrame(firstFrame)
-	}
+	meta.sessionRequestModel.Store(&model)
 	return meta
 }
 
@@ -255,7 +256,7 @@ func (m *openAIWSPassthroughUsageMeta) initFromFirstFrame(policyOutput []byte, m
 		return
 	}
 	m.serviceTier.Store(extractOpenAIServiceTierFromBody(policyOutput))
-	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, m.sessionRequestModel))
+	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, m.requestModelForFrame(nil)))
 }
 
 // captureRequestedReasoningEffort 在策略和模型改写前保存客户端档位。
@@ -263,7 +264,7 @@ func (m *openAIWSPassthroughUsageMeta) captureRequestedReasoningEffort(originalB
 	if m == nil {
 		return
 	}
-	candidates := append([]string{m.sessionRequestModel}, modelCandidates...)
+	candidates := append([]string{m.requestModelForFrame(nil)}, modelCandidates...)
 	m.requestedReasoningEffort.Store(CanonicalRequestedReasoningEffort(originalBody, candidates...))
 }
 
@@ -272,7 +273,7 @@ func (m *openAIWSPassthroughUsageMeta) updateSessionRequestModel(payload []byte)
 		return
 	}
 	if model := openAIWSPassthroughRequestModelFromSessionFrame(payload); model != "" {
-		m.sessionRequestModel = model
+		m.sessionRequestModel.Store(&model)
 	}
 }
 
@@ -283,7 +284,10 @@ func (m *openAIWSPassthroughUsageMeta) requestModelForFrame(payload []byte) stri
 	if model := openAIWSPassthroughRequestModelForFrame(payload); model != "" {
 		return model
 	}
-	return m.sessionRequestModel
+	if model := m.sessionRequestModel.Load(); model != nil {
+		return *model
+	}
+	return ""
 }
 
 func (m *openAIWSPassthroughUsageMeta) updateFromResponseCreate(policyOutput []byte, mappedModel string, requestModelForFrame string) {
@@ -729,6 +733,11 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 		writeCtx, cancel = context.WithDeadline(writeCtx, deadline)
 		defer cancel()
 	}
+	if c.beforeWrite != nil {
+		if err := c.beforeWrite(payload); err != nil {
+			return err
+		}
+	}
 	return c.conn.Write(writeCtx, msgType, payload)
 }
 
@@ -1089,6 +1098,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		controlCtx:           ctx,
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
+		beforeWrite: func(payload []byte) error {
+			return s.persistOpenAIHistoryResponsePayload(openAIHistoryTurnContext(ctx, hooks), account, payload)
+		},
 		restoreResponseModel: func(payload []byte) []byte {
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if !openAIWSEventMayContainModel(eventType) {
@@ -1113,8 +1125,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
-			// 后续 response.create 帧在策略过滤和上游转发前执行同一套用户提示词替换。
-			payload = s.ApplyUserPromptReplacement(ctx, payload, "openai_responses")
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
 			responseCreateAt := time.Time{}
@@ -1122,6 +1132,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				responseCreateAt = time.Now()
 			}
 			acceptedTurn := false
+			turnNo := int(completedTurns.Load()) + 1
+			if turnNo < 2 {
+				turnNo = 2
+			}
 			if isResponseCreate {
 				if !turnLifecycle.beginResponseCreate(clientFrameConn.markTurnStarted) {
 					err := errors.New("overlapping response.create is not supported")
@@ -1133,6 +1147,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 				}()
 			}
+			// 审核和历史准入必须看到转换前的输入，不能被提示替换或兼容转换隐藏。
+			if isResponseCreate && hooks != nil && hooks.BeforeRequest != nil {
+				requestModel := usageMeta.requestModelForFrame(payload)
+				if requestModel == "" {
+					requestModel = usageMeta.requestModelForFrame(nil)
+				}
+				previousID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
+				updated, err := hooks.BeforeRequest(turnNo, payload, requestModel, previousID)
+				if err != nil {
+					return payload, nil, err
+				}
+				if len(updated) > 0 {
+					payload = updated
+				}
+			}
+			payload = s.ApplyUserPromptReplacement(ctx, payload, "openai_responses")
 			if isResponseCreate {
 				if account.IsOpenAIOAuth() {
 					aliasedBody, reverse, aliased, aliasErr := aliasOpenAIOAuthReservedToolNamesBody(payload)
@@ -1178,24 +1208,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			if isResponseCreate {
 				usageMeta.captureRequestedReasoningEffort(originalResponseCreate)
-			}
-			turnNo := int(completedTurns.Load()) + 1
-			if turnNo < 2 {
-				turnNo = 2
-			}
-			if isResponseCreate && hooks != nil && hooks.BeforeRequest != nil {
-				requestModel := usageMeta.requestModelForFrame(payload)
-				if requestModel == "" {
-					requestModel = strings.TrimSpace(usageMeta.sessionRequestModel)
-				}
-				previousResponseID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
-				updatedPayload, err := hooks.BeforeRequest(turnNo, payload, requestModel, previousResponseID)
-				if err != nil {
-					return payload, nil, err
-				}
-				if len(updatedPayload) > 0 {
-					payload = updatedPayload
-				}
 			}
 
 			// 在写入 U 前先保存客户端会话模型 R，避免后续省略 model 时把上游模型当成新请求再次映射。

@@ -1558,6 +1558,18 @@
         </div>
       </div>
 
+      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2">
+          <input v-model="enableHistoryPolicy" data-testid="bulk-history-policy-enabled" type="checkbox" class="rounded" />
+          {{ t('admin.accounts.rejectExternalHistory') }}
+        </label>
+        <label v-if="enableHistoryPolicy" class="mt-3 flex items-center gap-2">
+          <input v-model="rejectExternalHistory" data-testid="bulk-reject-external-history" type="checkbox" class="rounded" />
+          {{ t('common.enabled') }}
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.rejectExternalHistoryHint') }}</p>
+      </div>
+
       <!-- TLS 指纹伪装 -->
       <div v-if="allTLSFingerprintCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1992,6 +2004,8 @@ const bulkRpmStrategy = ref<'tiered' | 'sticky_exempt'>('tiered')
 const bulkRpmStickyBuffer = ref<number | null>(null)
 const userMsgQueueMode = ref<string | null>(null)
 const tlsFingerprintEnabled = ref(false)
+const enableHistoryPolicy = ref(false)
+const rejectExternalHistory = ref(false)
 const tlsFingerprintProfileId = ref(0)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 const tlsFingerprintRouterId = ref<number | null>(null)
@@ -2433,6 +2447,9 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   }
 
   // 可见性也参与校验，防止目标筛选变更后把 OAuth 专属字段写到其他账号。
+  if (enableHistoryPolicy.value && allOpenAIOAuth.value) {
+    ensureExtra().openai_oauth_reject_external_history = rejectExternalHistory.value
+  }
   if (enableOpenAIFlattenNamespaces.value && allOpenAIOAuth.value) {
     const extra = ensureExtra()
     extra.openai_responses_flatten_namespaces = openaiFlattenNamespacesEnabled.value
@@ -2675,6 +2692,7 @@ const handleSubmit = async () => {
   }
 
   const hasAnyFieldEnabled =
+    (enableHistoryPolicy.value && allOpenAIOAuth.value) ||
     enableBaseUrl.value ||
     enableOpenAIPassthrough.value ||
     enableOpenAIFlattenNamespaces.value ||
@@ -2887,6 +2905,8 @@ const resetBulkEditFormState = () => {
   bulkRpmStickyBuffer.value = null
   userMsgQueueMode.value = null
   tlsFingerprintEnabled.value = false
+  enableHistoryPolicy.value = false
+  rejectExternalHistory.value = false
   tlsFingerprintProfileId.value = 0
   tlsFingerprintRouterId.value = null
 

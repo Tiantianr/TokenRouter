@@ -696,6 +696,16 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it.each([true, false])('批量历史限制应只在明确勾选后写入 %s', async (value) => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="bulk-history-policy-enabled"]').element.checked).toBe(false)
+    await wrapper.get('[data-testid="bulk-history-policy-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-reject-external-history"]').setValue(value)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], { extra: { openai_oauth_reject_external_history: value } })
+  })
+
   it('OpenAI API Key 批量编辑不显示 WS mode 入口', () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

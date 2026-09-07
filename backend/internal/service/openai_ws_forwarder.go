@@ -259,6 +259,8 @@ func (e *OpenAIWSClientCloseError) Reason() string {
 
 // OpenAIWSIngressHooks 定义入站 WS 每个 turn 的生命周期回调。
 type OpenAIWSIngressHooks struct {
+	// HistoryContext 返回当前已审核轮次的历史准入上下文。
+	HistoryContext func() context.Context
 	// ClientLifecycleContext 是叠加 ingress 租约取消信号前的客户端请求上下文。
 	// 下行写使用它保留客户端断连和服务关闭信号，同时避免租约丢失中断当前帧。
 	ClientLifecycleContext context.Context

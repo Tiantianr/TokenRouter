@@ -572,6 +572,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
+		if err := s.persistOpenAIHistoryResponsePayload(ctx, account, message); err != nil {
+			return nil, err
+		}
 
 		isTokenEvent := isOpenAIWSTokenEvent(eventType)
 		if isTokenEvent {

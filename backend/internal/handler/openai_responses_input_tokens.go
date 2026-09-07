@@ -62,6 +62,14 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 	reqModel := strings.TrimSpace(modelResult.String())
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && decision.Blocked {
+		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
+	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
+	if !h.prepareOpenAIHistory(c, apiKey, service.ContentModerationProtocolOpenAIResponses, body, sessionHash, false, true) {
+		return
+	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
@@ -82,7 +90,6 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 		body = h.gatewayService.ReplaceModelInBody(body, routingModel)
 	}
 	requestPlatform := openAICompatibleRequestPlatform(apiKey)
-	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
@@ -97,6 +104,9 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 		)
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		if selectErr != nil {
+			if h.handleOpenAIHistoryError(c, selectErr, false, false) {
+				return
+			}
 			reqLog.Warn("openai_responses_input_tokens.account_select_failed", zap.Error(selectErr))
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
@@ -129,10 +139,20 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 			if selection.Acquired && selection.ReleaseFunc != nil {
 				defer selection.ReleaseFunc()
 			}
+			if err := h.gatewayService.ValidateOpenAIHistoryTurn(c.Request.Context(), account); err != nil {
+				return err
+			}
 			return h.gatewayService.ForwardResponsesInputTokens(c.Request.Context(), c, account, body)
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
 		if forwardErr == nil {
+			return
+		}
+		if errors.Is(forwardErr, service.ErrOpenAIExternalHistory) {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
+		if h.handleOpenAIHistoryError(c, forwardErr, false, false) {
 			return
 		}
 		var failoverErr *service.UpstreamFailoverError

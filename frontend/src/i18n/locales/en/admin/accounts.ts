@@ -1,6 +1,8 @@
 export default {
 // Accounts
     accounts: {
+      rejectExternalHistory: 'Reject external conversation history',
+      rejectExternalHistoryHint: 'Disabled by default. When enabled, history requires ownership confirmed by a successful response from this credential account. Shadows inherit the parent policy. Group session isolation, access checks, and moderation remain independent.',
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
