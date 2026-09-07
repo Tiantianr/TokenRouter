@@ -312,7 +312,7 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 	return nil
 }
 
-// AccrueInviteRebate 按被邀请人本次实际获得的推理积分计提返利。
+// AccrueInviteRebate 按调用方提供的返利基数计提，支付订单使用售价或到账余额。
 func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, purchasedPoints float64) (float64, error) {
 	return s.AccrueInviteRebateForOrder(ctx, inviteeUserID, purchasedPoints, nil)
 }
