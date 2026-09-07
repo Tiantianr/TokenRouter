@@ -121,6 +121,7 @@ marketplace: {
     refresh: 'Refresh',
     sourceMode: 'Source Build',
     sourceModeHint: 'Source build, use git pull to update',
+    imageModeHint: 'Container image: update or roll back through 1Panel or Compose. Back up data and check database compatibility first.',
     updateNow: 'Update Now',
     updating: 'Updating...',
     updateComplete: 'Update Complete',

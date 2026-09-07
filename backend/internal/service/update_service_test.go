@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -31,13 +32,17 @@ type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
 	recentReleases []*GitHubRelease
 	recentErr      error
+	latestRepo     string
+	recentRepo     string
 }
 
-func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
+func (s *updateServiceGitHubClientStub) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
+	s.latestRepo = repo
 	return s.release, nil
 }
 
-func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
+func (s *updateServiceGitHubClientStub) FetchRecentReleases(_ context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	s.recentRepo = repo
 	return s.recentReleases, s.recentErr
 }
 
@@ -200,4 +205,45 @@ func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
 	require.Contains(t, err.Error(), "no compatible release found")
+}
+
+// 镜像更新入口在查询远端、下载和操作当前程序之前拒绝。
+func TestUpdateServiceImageRejectsBinaryMutations(t *testing.T) {
+	svc := NewUpdateService(nil, nil, "0.1.279", "image")
+	require.ErrorIs(t, svc.PerformUpdate(context.Background()), ErrImageUpdateRequired)
+	require.ErrorIs(t, svc.Rollback(), ErrImageUpdateRequired)
+	require.ErrorIs(t, svc.RollbackToVersion(context.Background(), "0.1.278"), ErrImageUpdateRequired)
+}
+
+func TestUpdateServicePersonalSourceRejectsUpstreamCache(t *testing.T) {
+	for _, repository := range []string{"", "TokenFlux/TokenRouter", "Tiantianr/TokenRouter"} {
+		t.Run(repository, func(t *testing.T) {
+			data, err := json.Marshal(map[string]any{
+				"repository": repository,
+				"latest":     "9.9.9",
+				"timestamp":  time.Now().Unix(),
+			})
+			require.NoError(t, err)
+			client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.280"}}
+			cache := &updateServiceCacheStub{data: string(data)}
+			svc := NewUpdateService(cache, client, "0.1.279", "image")
+			info, err := svc.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.Equal(t, "image", info.BuildType)
+			if repository == "Tiantianr/TokenRouter" {
+				require.True(t, info.Cached)
+				require.Empty(t, client.latestRepo)
+			} else {
+				require.False(t, info.Cached)
+				require.Equal(t, "0.1.280", info.LatestVersion)
+				require.Equal(t, "Tiantianr/TokenRouter", client.latestRepo)
+				cached, err := svc.getFromCache(context.Background())
+				require.NoError(t, err)
+				require.Equal(t, info.LatestVersion, cached.LatestVersion)
+			}
+			_, err = svc.ListRollbackVersions(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, "Tiantianr/TokenRouter", client.recentRepo)
+		})
+	}
 }

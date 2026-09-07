@@ -18,7 +18,7 @@ export interface VersionInfo {
   release_info?: ReleaseInfo
   cached: boolean
   warning?: string
-  build_type: string // "source" for manual builds, "release" for CI builds
+  build_type: string // source 为源码，release 为二进制，image 为不可变镜像。
 }
 
 /**

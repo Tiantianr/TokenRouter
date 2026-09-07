@@ -25,12 +25,13 @@ import (
 var (
 	ErrNoUpdateAvailable         = infraerrors.Conflict("ALREADY_UP_TO_DATE", "no update available; current version is latest")
 	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "version is not in the allowed rollback list")
+	ErrImageUpdateRequired       = infraerrors.Conflict("IMAGE_UPDATE_REQUIRED", "update or roll back the container image through your deployment manager")
 )
 
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "TokenFlux/TokenRouter"
+	githubRepo     = "Tiantianr/TokenRouter"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -64,7 +65,7 @@ type UpdateService struct {
 	cache          UpdateCache
 	githubClient   GitHubReleaseClient
 	currentVersion string
-	buildType      string // "source" for manual builds, "release" for CI builds
+	buildType      string // source 为源码，release 为二进制，image 为不可变镜像。
 }
 
 // NewUpdateService creates a new UpdateService
@@ -85,7 +86,7 @@ type UpdateInfo struct {
 	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
 	Cached         bool         `json:"cached"`
 	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	BuildType      string       `json:"build_type"` // source、release 或 image。
 }
 
 // ReleaseInfo contains GitHub release details
@@ -162,7 +163,11 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
+// @project-doc docs/operations/personal_release.md#image_updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if s.buildType == "image" {
+		return ErrImageUpdateRequired
+	}
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
 		return err
@@ -280,6 +285,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if s.buildType == "image" {
+		return ErrImageUpdateRequired
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -325,6 +333,9 @@ func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVer
 // RollbackToVersion 下载并安装指定旧版本。
 // 目标必须属于 ListRollbackVersions 返回的允许列表，当前版本和其他输入都会被拒绝。
 func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) error {
+	if s.buildType == "image" {
+		return ErrImageUpdateRequired
+	}
 	target, ok := normalizeRollbackVersion(version)
 	if !ok {
 		return ErrRollbackVersionNotAllowed
@@ -630,6 +641,7 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
@@ -638,7 +650,8 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		return nil, err
 	}
 
-	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
+	// 切换个人更新源后，不接受旧上游 Release 缓存。
+	if cached.Repository != githubRepo || time.Now().Unix()-cached.Timestamp > updateCacheTTL {
 		return nil, fmt.Errorf("cache expired")
 	}
 
@@ -654,10 +667,12 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
 	}{
+		Repository:  githubRepo,
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),

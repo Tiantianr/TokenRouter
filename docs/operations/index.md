@@ -8,6 +8,8 @@
 
 ## 文档
 
+- [个人仓库发布与 ID3 更新](personal_release.md)：个人 ARM64 镜像发行、缓存、授权、版本身份、备份部署及回退。读取时机：提交发版、启用 Actions、更新 ID3 或修改后台在线升级时必读。
+
 - [部署与数据库迁移](deployment_and_migrations.md)：构建产物、运行方式、首次初始化、迁移约束和升级恢复边界。读取时机：修改 Docker/二进制发布、启动装配、数据库迁移、备份或升级时读取。
 - [可观测性与数据生命周期](observability_and_data_lifecycle.md)：日志、Ops、Usage、审计、聚合、清理和备份的数据面总览与专题路由。读取时机：判断数据所有权、留存、备份范围或进入详细观测专题前读取。
 - [账号维护](account_maintenance.md)：凭据刷新、临时不可调度、账号测试、自动恢复、额度和能力探测。读取时机：修改 token refresh、账号状态、计划测试、quota/endpoint capability 探测或恢复策略时读取。

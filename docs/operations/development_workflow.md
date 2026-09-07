@@ -28,7 +28,7 @@
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13
 ```
 
-升级 Go 时必须同时修改 `backend/go.mod`，以及 `backend-ci.yml`（两处）、`release.yml`（两处）和 `security-scan.yml` 中的 `go version` 硬断言；workflow 都通过 `go-version-file: backend/go.mod` 安装工具链，任一断言遗漏都会在版本校验步骤失败。
+升级 Go 时必须同时修改 `backend/go.mod`、CI/安全检查中的版本断言，以及个人发布 workflow 的 Go 容器版本和缓存身份；个人发布不再运行多平台 Go matrix。
 
 不要把个人数据库路径、固定密码或某台机器的服务配置写入工程文档。开发配置使用未提交的环境文件或 `backend/config.yaml`；可提交样例在 `deploy/`。前端开发服务器默认通过 `VITE_DEV_PROXY_TARGET` 代理后端，端口由 `VITE_DEV_PORT` 控制。
 
@@ -127,8 +127,8 @@ npx --yes pnpm@9 --dir frontend run build
 
 ## 发布
 
-`.github/workflows/release.yml` 由 `v*` tag 或手动 dispatch 触发。标准发布只构建一次前端，再把 Linux、Windows 和 macOS 的五个 Go 目标分配到独立 runner 并行编译；最终 job 通过 `tools/goreleaser_prebuilt.sh` 把这些二进制导入 GoReleaser，统一生成 Release 归档、校验和、双架构镜像与 manifest。每个镜像架构只执行一次构建，并同时附加 GHCR 与可选 DockerHub 标签；未配置 DockerHub 时不会创建占位镜像。simple release 跳过二进制 matrix，只构建精简镜像集合。workflow 从 annotated tag body 读取 release notes，并在成功后把 `backend/cmd/server/VERSION` 同步回默认分支。
+个人仓库仅发布 Linux ARM64 镜像，流程与硬约束统一见 [个人仓库发布与 ID3 更新](personal_release.md)。前端和后端各构建一次，同 SHA 的 main 检查与构建并行，tag 不重复完整测试，不自动回写 VERSION；旧 `.goreleaser*.yaml` 不是个人发行入口，不得用它恢复跨平台发布。
 
-发布前确保目标提交已推送、CI 通过、数据库迁移可滚动升级且备份已验证。发布后检查 Release、镜像、二进制、VERSION 回写和部署 smoke test；tag 只标识代码版本，不替代迁移/恢复检查。
+发布前确保目标提交已推送、对应 CI 通过、迁移兼容窗口明确；部署前实际验证备份恢复。发布后核对 Release、manifest、镜像 digest/revision 和生产 smoke test，tag 不替代迁移或恢复检查。
 
 相关文档：[项目总览](../project_overview.md)、[系统架构](../architecture/system_architecture.md)、[配置边界](../interfaces/configuration.md)、[部署与数据库迁移](deployment_and_migrations.md)、[运维目录](index.md)。

@@ -13,7 +13,7 @@
 
 ## 构建与运行形态
 
-标准发布先生成一次前端静态资源，再由独立 runner 把同一份前端嵌入各平台 Go 二进制并行交叉编译；最终发布阶段统一归档二进制，并用 Linux `amd64`、`arm64` 产物组装多架构镜像和必要运行时工具。GitHub Release 同时发布 Linux `amd64`、Linux `arm64` 等产物，具体矩阵以 [release workflow](../../.github/workflows/release.yml) 为准。
+个人仓库发布先生成一次前端静态资源，再嵌入 Linux ARM64 Go 程序并包装单架构镜像，不发布桌面二进制或多架构 manifest。产物和备份部署约束见 [个人发布流程](personal_release.md)，其它运行方式属于源码现有能力，不代表个人 Release 提供对应归档。
 
 仓库支持以下运行形态：
 

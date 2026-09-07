@@ -247,7 +247,25 @@
                 </button>
               </div>
 
-              <!-- Priority 3: Update available for source build - show git pull hint -->
+              <!-- 镜像版本只提供发行信息，不暴露容器内二进制更新入口。 -->
+              <div v-else-if="isImageBuild" class="space-y-2">
+                <p class="text-xs text-gray-600 dark:text-dark-300">
+                  {{ t('version.imageModeHint') }}
+                </p>
+                <code class="block break-all text-xs text-gray-500 dark:text-dark-400">
+                  {{ DOCKER_IMAGE }}:{{ hasUpdate ? latestVersion : currentVersion }}
+                </code>
+                <a
+                  :href="`https://github.com/${GITHUB_REPO}/releases`"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex items-center justify-center gap-1 py-2 text-xs text-primary-600 dark:text-primary-400"
+                >
+                  {{ t('version.viewRelease') }}
+                  <Icon name="externalLink" size="xs" :stroke-width="2" />
+                </a>
+              </div>
+              <!-- 源码构建保留既有手动更新提示。 -->
               <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
@@ -667,9 +685,10 @@ import {
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 
-const GITHUB_REPO = 'TokenFlux/TokenRouter'
-// CI 发布到 GHCR 的镜像 tag 不带 v 前缀，例如 ghcr.io/tokenflux/tokenrouter:0.1.146。
-const DOCKER_IMAGE = 'ghcr.io/tokenflux/tokenrouter'
+// @project-doc docs/operations/personal_release.md#image_updates
+const GITHUB_REPO = 'Tiantianr/TokenRouter'
+// 个人镜像使用不带 v 的固定版本 tag。
+const DOCKER_IMAGE = 'ghcr.io/tiantianr/tokenrouter'
 
 const { t } = useI18n()
 
@@ -745,6 +764,7 @@ const activeManualCommand = computed(() =>
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
+const isImageBuild = computed(() => buildType.value === 'image')
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
