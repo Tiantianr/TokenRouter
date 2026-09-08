@@ -386,6 +386,8 @@ export default {
     accountBilled: '账号计费',
     resetNow: '现在',
     resetPending: '待刷新',
+    weeklyLimitEstimateShort: '预估 {value}',
+    weeklyLimitEstimateTooltip: '周限平台预估 {estimate}（{sampled} / {basis} x 100，7d 到达 {observed}% 时采样）',
     accountMultiplier: '账号倍率',
     avgDuration: '平均耗时',
     inSelectedRange: '所选范围内',

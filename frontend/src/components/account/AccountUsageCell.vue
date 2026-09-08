@@ -128,6 +128,7 @@
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
+          :account-cost-limit-estimate="usageInfo.seven_day.account_cost_limit_estimate"
           :show-now-when-idle="true"
           color="emerald"
         />

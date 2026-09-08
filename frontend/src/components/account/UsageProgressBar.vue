@@ -61,6 +61,15 @@
         {{ formatResetTime }}
       </span>
     </div>
+    <!-- 独立一行展示完整周限金额，避免挤压进度与重置时间。 -->
+    <div
+      v-if="validAccountCostLimitEstimate"
+      data-testid="account-cost-limit-estimate"
+      class="mt-0.5 break-words text-[10px] text-gray-500 dark:text-gray-400"
+      :title="accountCostLimitEstimateTitle"
+    >
+      {{ t('usage.weeklyLimitEstimateShort', { value: formattedEstimate }) }}
+    </div>
   </div>
 </template>
 
@@ -69,7 +78,7 @@ import { computed, ref, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
-import type { WindowStats } from '@/types'
+import type { AccountCostLimitEstimate, WindowStats } from '@/types'
 import { formatCompactNumber } from '@/utils/format'
 
 const props = withDefaults(
@@ -79,6 +88,7 @@ const props = withDefaults(
     resetsAt?: string | null
     color: 'indigo' | 'emerald' | 'purple' | 'amber'
     windowStats?: WindowStats | null
+    accountCostLimitEstimate?: AccountCostLimitEstimate | null
     showNowWhenIdle?: boolean
     remainingCapacity?: boolean
     wideLabel?: boolean
@@ -181,6 +191,32 @@ const displayPercent = computed(() => {
 const shouldShowResetTime = computed(() => {
   if (props.resetsAt) return true
   return Boolean(props.showNowWhenIdle && props.utilization <= 0)
+})
+
+const validAccountCostLimitEstimate = computed(() => {
+  const estimate = props.accountCostLimitEstimate
+  return Boolean(estimate &&
+    Number.isFinite(estimate.estimated_cost) && estimate.estimated_cost > 0 &&
+    Number.isFinite(estimate.sampled_cost) && estimate.sampled_cost > 0 &&
+    Number.isInteger(estimate.basis_percent) && estimate.basis_percent > 0 &&
+    Number.isInteger(estimate.observed_percent) && estimate.observed_percent > estimate.basis_percent)
+})
+
+// 金额四舍五入到整数美元，保留完整位数，不使用 k/m 缩写或余额单位换算。
+const formattedEstimate = computed(() =>
+  validAccountCostLimitEstimate.value && props.accountCostLimitEstimate
+    ? `A ${props.accountCostLimitEstimate.estimated_cost.toFixed(0)}$`
+    : '')
+
+const accountCostLimitEstimateTitle = computed(() => {
+  const estimate = props.accountCostLimitEstimate
+  if (!validAccountCostLimitEstimate.value || !estimate) return ''
+  return t('usage.weeklyLimitEstimateTooltip', {
+    estimate: `A ${estimate.estimated_cost.toFixed(2)}$`,
+    sampled: `A ${estimate.sampled_cost.toFixed(2)}$`,
+    basis: estimate.basis_percent,
+    observed: estimate.observed_percent
+  })
 })
 
 // Format reset time

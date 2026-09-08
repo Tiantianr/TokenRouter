@@ -7,12 +7,30 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string, params?: Record<string, unknown>) => params ? `${key} ${JSON.stringify(params)}` : key
     })
   }
 })
 
 describe('UsageProgressBar', () => {
+  it('周限保留完整整数美元且隐藏无效估值', async () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: { label: '7d', utilization: 7, color: 'emerald' }
+    })
+    expect(wrapper.find('[data-testid="account-cost-limit-estimate"]').exists()).toBe(false)
+    const estimate = { estimated_cost: 2000, sampled_cost: 120, basis_percent: 6, observed_percent: 7, sampled_at: '2026-03-17T00:00:00Z' }
+    await wrapper.setProps({ accountCostLimitEstimate: estimate })
+    const marker = wrapper.get('[data-testid="account-cost-limit-estimate"]')
+    expect(marker.text()).toContain('A 2000$')
+    expect(marker.text()).not.toContain('2.0k')
+    expect(marker.attributes('title')).toContain('120.00$')
+    // 五位数也不能被缩写或截断，小数按整数美元四舍五入。
+    await wrapper.setProps({ accountCostLimitEstimate: { ...estimate, estimated_cost: 12345.67 } })
+    expect(marker.text()).toContain('12346$')
+    await wrapper.setProps({ accountCostLimitEstimate: { ...estimate, estimated_cost: NaN } })
+    expect(wrapper.find('[data-testid="account-cost-limit-estimate"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-17T00:00:00Z'))

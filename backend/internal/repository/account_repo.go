@@ -2607,6 +2607,11 @@ func shouldEnqueueSchedulerOutboxForExtraUpdates(updates map[string]any) bool {
 	return false
 }
 
+// StoreAccountUsageObservation 保存展示观测；codex_7d_ 前缀不触发调度重建。
+func (r *accountRepository) StoreAccountUsageObservation(ctx context.Context, accountID int64, updates map[string]any) error {
+	return r.UpdateExtra(ctx, accountID, updates)
+}
+
 func isSchedulerNeutralExtraKey(key string) bool {
 	key = strings.TrimSpace(key)
 	if key == "" {

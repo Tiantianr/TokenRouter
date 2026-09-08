@@ -12,7 +12,7 @@
     width: 100%;
     min-width: 0;
     color-scheme: light;
-    scrollbar-color: rgba(18, 167, 232, 0.26) transparent;
+    scrollbar-color: rgba(37, 99, 235, 0.26) transparent;
     scrollbar-width: thin;
     background: #FCFCFE;
     background-attachment: fixed;
@@ -93,7 +93,7 @@
       .sidebar-nav,
       .code-block
     ):focus-within {
-      scrollbar-color: rgba(0, 210, 255, 0.35) transparent;
+      scrollbar-color: rgba(60, 128, 230, 0.35) transparent;
     }
 
     .dark :where(
@@ -138,7 +138,7 @@
   html::-webkit-scrollbar-thumb,
   body::-webkit-scrollbar-thumb {
     @apply rounded-full;
-    background-color: rgba(18, 167, 232, 0.26);
+    background-color: rgba(37, 99, 235, 0.26);
     background-clip: padding-box;
     border: 3px solid transparent;
     transition: background-color 0.2s ease;
@@ -151,7 +151,7 @@
 
   html::-webkit-scrollbar-thumb:hover,
   body::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(18, 167, 232, 0.46);
+    background-color: rgba(37, 99, 235, 0.46);
   }
 
   html.dark::-webkit-scrollbar-thumb:hover,
@@ -219,7 +219,7 @@
     .sidebar-nav,
     .code-block
   ):focus-within::-webkit-scrollbar-thumb {
-    background-color: rgba(0, 210, 255, 0.32);
+    background-color: rgba(60, 128, 230, 0.32);
   }
 
   .dark :where(
@@ -255,7 +255,7 @@
     .sidebar-nav,
     .code-block
   )::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(0, 210, 255, 0.48);
+    background-color: rgba(60, 128, 230, 0.48);
   }
 
   .dark :where(
@@ -788,7 +788,8 @@
     @apply flex h-9 items-center gap-3 rounded-control py-1.5;
     @apply overflow-hidden;
     @apply text-sm font-medium;
-    @apply text-primary-900 dark:text-dark-100;
+    /* 默认文字与继承颜色的图标使用中性灰，品牌蓝仅强调交互状态。 */
+    @apply text-gray-700 dark:text-dark-100;
     @apply transition-all duration-200;
     @apply hover:bg-primary-100 dark:hover:bg-dark-950;
     @apply hover:text-primary-700 dark:hover:text-primary-400;
@@ -810,7 +811,7 @@
   .sidebar-section-title {
     @apply mb-2 px-3;
     @apply text-xs font-semibold tracking-wider;
-    @apply text-primary-900/80 dark:text-dark-300;
+    @apply text-gray-500 dark:text-dark-300;
   }
 
   /* ============ 页面头部 ============ */
@@ -988,7 +989,7 @@
 @layer utilities {
   /* 通用开关的启用态统一使用品牌蓝。 */
   .toggle-active {
-    background-color: rgb(18, 167, 232);
+    background-color: rgb(37, 99, 235);
   }
 
   /* 浅色主题统一加深常规次级文字，暗色主题继续使用各组件原有的颜色。 */

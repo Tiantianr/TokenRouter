@@ -420,6 +420,52 @@ describe('PaymentView subscription plan group matching', () => {
 })
 
 describe('PaymentView subscription plan grid', () => {
+  it('默认显示充值额度，入口顺序为充值、订阅', async () => {
+    const wrapper = await mountSubscriptionConfirm({}, {})
+    const tabs = wrapper.findAll('button').slice(0, 2)
+
+    expect(tabs.map(button => button.text())).toEqual(['payment.tabTopUp', 'payment.tabSubscribe'])
+    expect(tabs.map(button => button.attributes('aria-pressed'))).toEqual(['true', 'false'])
+    expect(wrapper.find('[data-testid="recharge-content"]').exists()).toBe(true)
+  })
+
+  it('选中和切换套餐时保留列表，取消只关闭结算区', async () => {
+    const wrapper = await mountSubscriptionPlanList(3)
+    expect(wrapper.get('[data-testid="purchase-content"]').classes()).toContain('max-w-6xl')
+    expect(wrapper.findAll('button').slice(0, 2).map(button => button.text())).toEqual(['payment.tabTopUp', 'payment.tabSubscribe'])
+    const cards = wrapper.findAllComponents(SubscriptionPlanCard)
+    cards[0].vm.$emit('select', cards[0].props('plan'))
+    await flushPromises()
+
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(3)
+    expect(cards[0].props('selected')).toBe(true)
+    expect(wrapper.get('[data-testid="subscription-checkout"]').text()).toContain('Plan 1')
+    expect(createOrder).not.toHaveBeenCalled()
+
+    cards[1].vm.$emit('select', cards[1].props('plan'))
+    await flushPromises()
+    expect(cards[0].props('selected')).toBe(false)
+    expect(cards[1].props('selected')).toBe(true)
+    expect(wrapper.get('[data-testid="subscription-checkout"]').text()).toContain('Plan 2')
+
+    await wrapper.findAll('button').find(button => button.text() === 'common.cancel')!.trigger('click')
+    expect(wrapper.find('[data-testid="subscription-checkout"]').exists()).toBe(false)
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(3)
+    expect(cards[1].props('selected')).toBe(false)
+  })
+
+  it('结算期间可切到充值，再返回时保留套餐选择', async () => {
+    const wrapper = await mountSubscriptionPlanList(3)
+    const card = wrapper.findAllComponents(SubscriptionPlanCard)[0]
+    card.vm.$emit('select', card.props('plan'))
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'payment.tabTopUp')!.trigger('click')
+    expect(wrapper.get('[data-testid="recharge-content"]').classes()).toContain('max-w-2xl')
+    expect(wrapper.findComponent(AmountInput).exists()).toBe(true)
+    await wrapper.findAll('button').find(button => button.text() === 'payment.tabSubscribe')!.trigger('click')
+    expect(wrapper.get('[data-testid="subscription-checkout"]').text()).toContain('Plan 1')
+  })
+
   it.each([3, 4, 6])('为 %i 个套餐保留移动端、平板和桌面端响应式网格', async (planCount) => {
     const wrapper = await mountSubscriptionPlanList(planCount)
     const cards = wrapper.findAllComponents(SubscriptionPlanCard)
@@ -462,6 +508,8 @@ describe('PaymentView recharge rate preview', () => {
     wrapper.getComponent(AmountInput).vm.$emit('update:modelValue', 10)
     await flushPromises()
 
+    expect(wrapper.getComponent(AmountInput).props('currencySymbol')).toBe('$')
+    expect(wrapper.getComponent(AmountInput).props('amounts')).toEqual([10, 20, 50, 100, 200, 500])
     expect(translate).toHaveBeenCalledWith('payment.rechargeRatePreview', {
       currency: 'USD',
       amount: '0.50',
@@ -1080,8 +1128,9 @@ describe('PaymentView duplicate subscription notice', () => {
     await dialog.vm.$emit('confirm')
     await flushPromises()
 
-    expect(wrapper.findAllComponents({ name: 'SubscriptionPlanCard' })).toHaveLength(0)
-    expect(wrapper.text()).toContain('payment.createOrder')
+    expect(wrapper.findAllComponents({ name: 'SubscriptionPlanCard' })).toHaveLength(1)
+    expect(wrapper.getComponent(SubscriptionPlanCard).props('selected')).toBe(true)
+    expect(wrapper.text()).toContain('payment.confirmPay')
   })
 })
 

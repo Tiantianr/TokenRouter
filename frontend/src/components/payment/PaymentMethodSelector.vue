@@ -1,12 +1,12 @@
 <template>
   <div>
-    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+    <label :class="compact ? 'mb-4' : 'mb-3'" class="block text-sm font-bold text-accent-800 dark:text-white">
       {{ t('payment.paymentMethod') }}
     </label>
     <!-- EasyPay 方法由管理员动态配置，网格必须在面板内换行。 -->
     <div
       data-testid="payment-method-grid"
-      class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+      :class="compact ? 'grid grid-cols-[repeat(auto-fit,minmax(112px,128px))] gap-4' : 'grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4'"
     >
       <button
         v-for="method in sortedMethods"
@@ -15,7 +15,8 @@
         :title="methodLabel(method)"
         :disabled="!method.available"
         :class="[
-          'relative flex h-[60px] min-w-0 flex-col items-center justify-center rounded-lg border px-3 transition-all',
+          'relative flex min-w-0 flex-col items-center justify-center rounded-[12px] border px-3 transition-all',
+          compact ? 'h-11 border-2' : 'h-[60px]',
           !method.available
             ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-dark-700 dark:bg-dark-800/50'
             : selected === method.type
@@ -25,7 +26,7 @@
         @click="method.available && emit('select', method.type)"
       >
         <span class="flex w-full min-w-0 items-center justify-center gap-2">
-          <img :src="methodIcon(method.type)" :alt="methodLabel(method)" class="h-7 w-7 shrink-0 object-contain" />
+          <img :src="methodIcon(method.type)" :alt="methodLabel(method)" :class="['shrink-0 object-contain', compact ? 'h-5 w-5' : 'h-7 w-7']" />
           <span class="flex min-w-0 flex-col items-start leading-none">
             <span data-testid="payment-method-label" class="block w-full truncate text-base font-semibold">
               {{ methodLabel(method) }}
@@ -61,10 +62,11 @@ export interface PaymentMethodOption {
   available: boolean
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   methods: PaymentMethodOption[]
   selected: string
-}>()
+  compact?: boolean
+}>(), { compact: false })
 
 const emit = defineEmits<{
   select: [type: string]
@@ -101,11 +103,12 @@ function methodLabel(method: PaymentMethodOption): string {
 }
 
 function methodSelectedClass(type: string): string {
-  if (isBuiltInAlipayMethod(type)) return 'border-[#02A9F1] bg-blue-50 text-gray-900 shadow-sm dark:bg-blue-950 dark:text-gray-100'
-  if (isBuiltInWxpayMethod(type)) return 'border-[#09BB07] bg-green-50 text-gray-900 shadow-sm dark:bg-green-950 dark:text-gray-100'
-  if (type === 'stripe') return 'border-[#676BE5] bg-indigo-50 text-gray-900 shadow-sm dark:bg-indigo-950 dark:text-gray-100'
-  if (type === 'airwallex') return 'border-[#FF6B3D] bg-orange-50 text-gray-900 shadow-sm dark:border-[#FF8E3C] dark:bg-orange-950 dark:text-gray-100'
-  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-sm dark:bg-primary-950 dark:text-gray-100'
+  if (props.compact) return 'border-blue-600 bg-blue-50 text-blue-700 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300'
+  if (isBuiltInAlipayMethod(type)) return 'border-[#02A9F1] bg-blue-50 text-gray-900 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:bg-blue-950 dark:text-gray-100'
+  if (isBuiltInWxpayMethod(type)) return 'border-[#09BB07] bg-green-50 text-gray-900 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:bg-green-950 dark:text-gray-100'
+  if (type === 'stripe') return 'border-[#676BE5] bg-indigo-50 text-gray-900 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:bg-indigo-950 dark:text-gray-100'
+  if (type === 'airwallex') return 'border-[#FF6B3D] bg-orange-50 text-gray-900 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:border-[#FF8E3C] dark:bg-orange-950 dark:text-gray-100'
+  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-[0_1px_2px_0_rgb(0_0_0/0.05)] dark:bg-primary-950 dark:text-gray-100'
 }
 function methodFeeLabel(method: PaymentMethodOption): string {
   const parts: string[] = []

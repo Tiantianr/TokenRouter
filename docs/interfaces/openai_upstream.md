@@ -130,7 +130,12 @@ API Key 的普通调度能力只表达 `text_generation` 与 `embeddings` 工作
 
 Images API 的流式与非流式上游请求都脱离客户端请求取消信号继续执行，并由上游响应超时控制最终回收。生图属于长耗时且上游可能已经产生实际成本的媒体任务；客户端中途断开不能取消上游并丢失已完成图片的计费结果。下游写失败不改变图片产出和结算事实。
 
+<a id="openai_quota_and_scheduling"></a>
 ## 额度与调度
+
+账号列表的 OpenAI OAuth 7d 用量提供账号成本口径的周限估算，响应字段为 `seven_day.account_cost_limit_estimate`。首次观测只建立基线；整数百分比上升时，以当前窗口累计账号成本 A 除以上次观测百分比再乘 100，生成估值。相同百分比期间冻结估值，百分比回落或重置时间变化超过十五分钟时重建基线；缺少有效成本、重置时间或正数基准时不展示。估值不是上游承诺额度，不参与结算和调度。
+
+观测快照保存在 `account.extra.codex_7d_limit_estimate`，沿用展示类 extra 更新，不触发调度 outbox。服务内按账号串行化观测，避免旧账号副本重复采样同一百分比。前端只在 OpenAI OAuth 7d 进度条下展示，按完整整数美元四舍五入，例如 `预估 A 2000$`，不使用 k/m 缩写，也不进行用户余额单位换算；悬浮提示保留两位小数和采样公式。
 
 OpenAI 是通用高级调度器的能力适配者之一，而不是该调度器的全局所有者。只有最终目标 Group 的 `scheduler_type=advanced` 时，OpenAI 路径才在共同 active/schedulable、分组、模型、限流和并发硬过滤后使用通用 Top-K 评分；`basic` 保留原有默认选择路径。高级分组可用稀疏 `advanced_scheduler_overrides` 覆盖全局 Top-K、评分权重和粘性开关，未设置字段继续继承网关设置。高级分组还会考虑所需 transport/capability、账号优先级、负载、排队、错误率、近期延迟、配额余量和粘性上下文。previous response、WebSocket 会话和显式 session 可约束账号复用；只有策略允许时才能迁移。
 

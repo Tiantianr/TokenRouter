@@ -1414,12 +1414,22 @@ export interface WindowStats {
 }
 
 export interface UsageProgress {
+  account_cost_limit_estimate?: AccountCostLimitEstimate | null
   utilization: number // Percentage (0-100+, 100 = 100%)
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
   used_requests?: number
   limit_requests?: number
+}
+
+// 周限估算使用账号成本，采样百分比与时间用于解释估值来源。
+export interface AccountCostLimitEstimate {
+  estimated_cost: number
+  sampled_cost: number
+  basis_percent: number
+  observed_percent: number
+  sampled_at: string
 }
 
 // Antigravity 单个模型的配额信息

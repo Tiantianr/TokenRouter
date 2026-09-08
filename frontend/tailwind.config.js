@@ -22,33 +22,33 @@ export default {
     },
     extend: {
       colors: {
-        // 主色调 - Blue Archive 蓝白主题
+        // 主色调与 sub-custom 品牌蓝保持一致，保留本工程的中性背景与布局。
         primary: {
-          50: '#F6FCFF',
-          100: '#DDF4FC',
-          200: '#BFEAFF',
-          300: '#8BDDF8',
-          400: '#4DD4F6',
-          500: '#00D2FF',
-          600: '#12A7E8',
-          700: '#0B8FD8',
-          800: '#176F9E',
-          900: '#2D4F68',
-          950: '#071A2A'
+          50: '#eff6ff',
+          100: '#dbeafe',
+          200: '#bfdbfe',
+          300: '#93c5fd',
+          400: '#60a5fa',
+          500: '#3c80e6',
+          600: '#2563eb',
+          700: '#1d4ed8',
+          800: '#1e40af',
+          900: '#1e3a8a',
+          950: '#172554'
         },
-        // 辅助色 - 冰白到品牌深蓝
+        // 辅助色使用旧工程的深蓝灰，避免控件保留青色底调。
         accent: {
-          50: '#FFFFFF',
-          100: '#EAF8FE',
-          200: '#CDEFFD',
-          300: '#9BDEFA',
-          400: '#5BCDF2',
-          500: '#1598D8',
-          600: '#0B8FD8',
-          700: '#176F9E',
-          800: '#2D4F68',
-          900: '#21465E',
-          950: '#071A2A'
+          50: '#f8fafc',
+          100: '#f1f5f9',
+          200: '#e2e8f0',
+          300: '#cbd5e1',
+          400: '#94a3b8',
+          500: '#64748b',
+          600: '#475569',
+          700: '#334155',
+          800: '#1e293b',
+          900: '#0f172a',
+          950: '#020617'
         },
         // 覆盖默认 gray/slate:Tailwind 默认值偏蓝(#1f2937/#0f172a 等),深色模式下会残留蓝调
         // 统一映射到中性 zinc 色相,与 dark 色阶同一体系
@@ -126,20 +126,20 @@ export default {
         sm: 'none',
         glass: 'none',
         'glass-sm': 'none',
-        glow: '0 0 20px rgba(0, 210, 255, 0.28)',
-        'glow-lg': '0 0 40px rgba(18, 167, 232, 0.35)',
+        glow: '0 0 20px rgba(60, 128, 230, 0.28)',
+        'glow-lg': '0 0 40px rgba(37, 99, 235, 0.35)',
         card: 'none',
         'card-hover': 'none',
         'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.1)'
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-        'gradient-primary': 'linear-gradient(135deg, #00D2FF 0%, #0B8FD8 100%)',
+        'gradient-primary': 'linear-gradient(135deg, #3c80e6 0%, #1d4ed8 100%)',
         'gradient-dark': 'linear-gradient(135deg, #1F1F23 0%, #0F0F11 100%)',
         'gradient-glass':
           'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
         'mesh-gradient':
-          'radial-gradient(at 40% 20%, rgba(0, 210, 255, 0.14) 0px, transparent 50%), radial-gradient(at 80% 0%, rgba(139, 221, 248, 0.12) 0px, transparent 50%), radial-gradient(at 0% 50%, rgba(18, 167, 232, 0.1) 0px, transparent 50%)'
+          'radial-gradient(at 40% 20%, rgba(60, 128, 230, 0.14) 0px, transparent 50%), radial-gradient(at 80% 0%, rgba(147, 197, 253, 0.12) 0px, transparent 50%), radial-gradient(at 0% 50%, rgba(37, 99, 235, 0.1) 0px, transparent 50%)'
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',
@@ -177,8 +177,8 @@ export default {
           '100%': { backgroundPosition: '200% 0' }
         },
         glow: {
-          '0%': { boxShadow: '0 0 20px rgba(0, 210, 255, 0.28)' },
-          '100%': { boxShadow: '0 0 30px rgba(18, 167, 232, 0.4)' }
+          '0%': { boxShadow: '0 0 20px rgba(60, 128, 230, 0.28)' },
+          '100%': { boxShadow: '0 0 30px rgba(37, 99, 235, 0.4)' }
         }
       },
       backdropBlur: {

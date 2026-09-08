@@ -251,7 +251,7 @@ const REF_OUTLINE_KIND = 'ref-outline'
 const RESOLUTION_TAG_KIND = 'resolution-tag'
 const ANCHOR_OUTLINE_STYLE = {
   fill: 'transparent',
-  stroke: 'rgba(0, 210, 255, 0.7)',
+  stroke: 'rgba(60, 128, 230, 0.7)',
   strokeWidth: 1.5,
   strokeDashArray: [6, 4],
 }

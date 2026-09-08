@@ -158,12 +158,13 @@ type WindowStats struct {
 
 // UsageProgress 使用量进度
 type UsageProgress struct {
-	Utilization      float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
-	ResetsAt         *time.Time   `json:"resets_at"`              // 重置时间
-	RemainingSeconds int          `json:"remaining_seconds"`      // 距重置剩余秒数
-	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
-	UsedRequests     int64        `json:"used_requests,omitempty"`
-	LimitRequests    int64        `json:"limit_requests,omitempty"`
+	AccountCostLimitEstimate *AccountCostLimitEstimate `json:"account_cost_limit_estimate,omitempty"` // 账号成本口径的周限估算
+	Utilization              float64                   `json:"utilization"`                           // 使用率百分比 (0-100+，100表示100%)
+	ResetsAt                 *time.Time                `json:"resets_at"`                             // 重置时间
+	RemainingSeconds         int                       `json:"remaining_seconds"`                     // 距重置剩余秒数
+	WindowStats              *WindowStats              `json:"window_stats,omitempty"`                // 窗口期统计（从窗口开始到当前的使用量）
+	UsedRequests             int64                     `json:"used_requests,omitempty"`
+	LimitRequests            int64                     `json:"limit_requests,omitempty"`
 }
 
 // AntigravityModelQuota Antigravity 单个模型的配额信息
@@ -337,6 +338,8 @@ type ClaudeUsageFetcher interface {
 
 // AccountUsageService 账号使用量查询服务
 type AccountUsageService struct {
+	openAIWeeklyEstimate    sync.Map // 账号 ID 对应最近一次周限观测
+	openAIWeeklyEstimateMu  [64]sync.Mutex
 	accountRepo             AccountRepository
 	usageLogRepo            UsageLogRepository
 	usageFetcher            ClaudeUsageFetcher
@@ -807,6 +810,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 	}
+	s.attachOpenAIWeeklyLimitEstimate(ctx, account, usage.SevenDay, now)
 
 	return usage, nil
 }
