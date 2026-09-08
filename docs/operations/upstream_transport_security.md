@@ -9,6 +9,7 @@
 - [TLS 指纹路由](#tls-指纹路由)：修改 profile、router 或采集器时读取。
 - [目标与重定向校验](#目标与重定向校验)：修改 base URL、DNS 或 SSRF 防护时读取。
 - [Header 与凭据边界](#header-与凭据边界)：修改 override 或认证传递时读取。
+- [账号级 Codex UA](#account_codex_user_agent)：修改 OAuth 账号 UA 的创建、编辑、校验和清空语义时读取。
 - [诊断与降级](#诊断与降级)：排查代理、TLS、直连和上游失败时读取。
 
 <a id="upstream_proxy_lifecycle"></a>
@@ -54,6 +55,15 @@ Header override 只对 Anthropic/OpenAI/Kimi/Zhipu/DeepSeek 的 API Key 账号�
 构建器通常先写入平台认证、客户端身份和会话头，再在末尾应用允许的 override；因此允许项可以有意覆盖 User-Agent 等内置头，而禁止项不会遮蔽真实凭据或固定会话身份。新增转发路径时必须复用同一套过滤与应用函数，不能直接遍历原始 credentials。
 
 代理 URL、API Key、OAuth token、AWS/Google 凭据和 TLS 采集内容不得进入普通错误、Ops body 或前端公开设置。错误日志只记录代理/TLS/profile ID、目标 host、阶段和脱敏分类。
+
+<a id="account_codex_user_agent"></a>
+## 账号级 Codex UA
+
+OpenAI OAuth 母账号的新建和编辑弹窗提供独立的 `credentials.user_agent` 输入框，不通过通用 Header override 开放任意请求头。编辑时回显已有值，包括导入遗留配置；影子账号由母账号管理凭据，不提供独立 UA。新建弹窗的授权码和令牌导入提交共用该字段，留空不写入账号覆盖。
+
+管理端创建和单账号更新接受不超过 1024 字节的可打印 ASCII Codex UA，要求能够使用现有身份解析器配对 Originator 并提取三段引擎版本；拒绝控制字符、非字符串和无法配对的身份。编辑清空时显式提交空字符串，由后端删除该字段，其他敏感凭据仍按现有合并规则保留，更新继续走原有调度缓存失效机制。已有非法 UA 在重新提交凭据时需要修正或清空。
+
+该输入框不改变出站优先级：TLS 路由规则和 `ForceCodexCLI` 在现有路径中仍可能覆盖账号 UA。移除账号覆盖仅恢复原有选择规则，合法的客户端 Codex UA 仍可能保留，不表示强制全局 UA。最终 Originator 由已有转发逻辑按最终 UA 配对；此功能不改变 Version 处理、TLS 模板、客户端准入、会话隔离或历史审核，也不批量改写存量账号。
 
 ## 诊断与降级
 

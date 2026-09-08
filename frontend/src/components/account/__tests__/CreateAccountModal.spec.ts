@@ -520,6 +520,30 @@ describe('CreateAccountModal OpenAI account options', () => {
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_oauth_reject_external_history).toBe(true)
   })
 
+  it.each([
+    ['import-codex-session', importCodexSessionMock],
+    ['import-codex-pat', createOpenAICodexPATMock],
+  ])('Codex 导入携带账号 UA：%s', async (triggerTestId, apiMock) => {
+    const wrapper = mountModal()
+    expect(wrapper.find('[data-testid="create-codex-user-agent"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'OpenAI')
+    const ua = 'codex-tui/0.153.4 (Mac OS 26.6.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.153.4)'
+    await wrapper.get('[data-testid="create-codex-user-agent"]').setValue(`  ${ua}  `)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Fixed UA')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await wrapper.get(`[data-testid="${triggerTestId}"]`).trigger('click')
+    await flushPromises()
+    expect(apiMock.mock.calls[0]?.[0]?.credential_extras?.user_agent).toBe(ua)
+  })
+
+  it('留空显式清除导入默认 UA，不自动填入全局 UA', async () => {
+    getOpenAIOAuthImportDefaultsMock.mockResolvedValue({ credentials: { user_agent: 'codex-tui/0.144.0' }, extra: {} })
+    const wrapper = await openCodexImportStep()
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.credential_extras?.user_agent).toBe('')
+  })
+
   it('persists an explicit Codex fingerprint convergence mode for OAuth imports', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')

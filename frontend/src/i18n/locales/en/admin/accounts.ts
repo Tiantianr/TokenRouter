@@ -794,6 +794,9 @@ export default {
         codexCLIOnlyDesc:
           'Only applies to OpenAI OAuth. When enabled, only Codex official client families are allowed; when disabled, the gateway bypasses this restriction and keeps existing behavior.',
         clientPolicy: 'Client access policy',
+        accountUserAgent: 'Account Codex User-Agent',
+        accountUserAgentPlaceholder: 'Empty: no account override',
+        accountUserAgentHint: 'Clearing removes the account UA and restores existing selection rules; it does not force the global UA. TLS routing rules and ForceCodexCLI may still override this value.',
         clientPolicyDesc:
           'Only applies to OpenAI OAuth. Allow any client, restrict to official Codex clients, or require the request to match a TLS router rule.',
         clientPolicyAny: 'Allow any client',

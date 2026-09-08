@@ -1352,6 +1352,23 @@
         </div>
       </div>
 
+      <div v-if="form.platform === 'openai' && accountCategory === 'oauth-based' && addMethod === 'oauth'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label for="create-codex-user-agent" class="input-label" :title="t('admin.accounts.openai.accountUserAgentHint')">
+          {{ t('admin.accounts.openai.accountUserAgent') }}
+        </label>
+        <input
+          id="create-codex-user-agent"
+          v-model="codexUserAgent"
+          data-testid="create-codex-user-agent"
+          type="text"
+          class="input font-mono text-sm"
+          maxlength="1024"
+          autocomplete="off"
+          :spellcheck="false"
+          :placeholder="t('admin.accounts.openai.accountUserAgentPlaceholder')"
+        />
+      </div>
+
       <div v-if="form.platform === 'openai' && accountCategory === 'oauth-based'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="flex items-center gap-2">
           <input v-model="rejectExternalHistory" data-testid="create-reject-external-history" type="checkbox" class="rounded" />
@@ -4866,6 +4883,7 @@ const umqModeOptions = computed(() => [
 const tlsFingerprintEnabled = ref(false)
 // 默认关闭，避免升级后自动限制存量会话；启用后才要求已确认的历史归属。
 const rejectExternalHistory = ref(false)
+const codexUserAgent = ref('')
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 const tlsFingerprintRouterId = ref<number | null>(null)
@@ -5154,6 +5172,11 @@ const applyOpenAIOAuthCredentialDefaults = (credentials: Record<string, unknown>
       credentials[key] = value
     }
   }
+}
+
+// 空值也要显式传递，防止服务端导入默认值或旧账号 UA 重新覆盖表单选择。
+const applyOpenAICodexUserAgent = (credentials: Record<string, unknown>) => {
+  credentials.user_agent = codexUserAgent.value.trim()
 }
 
 const mixedChannelWarningMessageText = computed(() => {
@@ -5970,6 +5993,7 @@ const resetForm = () => {
   userMsgQueueMode.value = ''
   tlsFingerprintEnabled.value = false
   rejectExternalHistory.value = false
+  codexUserAgent.value = ''
   tlsFingerprintProfileId.value = null
   tlsFingerprintRouterId.value = null
   sessionIdMaskingEnabled.value = false
@@ -6196,6 +6220,11 @@ const doCreateAccount = async (
   payload: CreateAccountRequest,
   isCurrent: AccountCreateGuard = () => true
 ): Promise<boolean> => {
+  // 通用新建入口与专用 OAuth 导入入口使用同一个 UA 字段写入方法。
+  if (payload.platform === 'openai' && payload.type === 'oauth') {
+    payload.credentials = { ...payload.credentials }
+    applyOpenAICodexUserAgent(payload.credentials)
+  }
   let confirmedResult = false
   const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {
     if (!isCurrent()) return
@@ -6991,6 +7020,7 @@ const buildOpenAIOAuthAccountRequest = (
   const extra = buildOpenAIExtra(oauthExtra)
 
   applyOpenAIOAuthCredentialDefaults(credentials)
+  applyOpenAICodexUserAgent(credentials)
   // OpenAI OAuth 透传模式下不应用模型限制。
   if (!isOpenAIModelRestrictionDisabled.value) {
     applyPersistedModelRestriction(credentials)
@@ -7331,6 +7361,7 @@ const OPENAI_MOBILE_RT_CLIENT_ID = 'app_LlGpXReQgckcGGUo2JrYvtJK'
 
 const buildOpenAICodexImportCredentialExtras = (): Record<string, unknown> | null => {
   const credentials: Record<string, unknown> = {}
+  applyOpenAICodexUserAgent(credentials)
   if (!isOpenAIModelRestrictionDisabled.value) {
     // 与其他 OpenAI OAuth 创建方式保持一致：映射和最终白名单分别保存。
     applyPersistedModelRestriction(credentials)

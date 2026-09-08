@@ -376,6 +376,34 @@ describe('EditAccountModal', () => {
     expect(wrapper.text()).toContain('admin.accounts.mapRequestModels')
   })
 
+  it.each(['codex-tui/0.153.4 (Mac OS 26.6.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.153.4)', ''])('回显并保存 OAuth 账号 UA：%s', async (value) => {
+    const account = { ...buildAccount(), type: 'oauth', credentials: { user_agent: 'codex-tui/0.144.0', plan_type: 'pro' } }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const input = wrapper.get<HTMLInputElement>('[data-testid="edit-codex-user-agent"]')
+    expect(input.element.value).toBe('codex-tui/0.144.0')
+    await input.setValue(`  ${value}  `)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({ user_agent: value, plan_type: 'pro' })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('access_token')
+  })
+
+  it('切换账号时清除 UA 表单残留', async () => {
+    const wrapper = mountModal({ ...buildAccount(), type: 'oauth', credentials: { user_agent: 'codex-tui/0.153.4' } })
+    await flushPromises()
+    await wrapper.setProps({ account: { ...buildAccount(), id: 12, type: 'oauth', credentials: {} } })
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-codex-user-agent"]').element.value).toBe('')
+  })
+
+  it('API Key 和影子账号不显示独立 Codex UA 输入框', () => {
+    expect(mountModal().find('[data-testid="edit-codex-user-agent"]').exists()).toBe(false)
+    expect(mountModal(buildOpenAISparkShadowAccount()).find('[data-testid="edit-codex-user-agent"]').exists()).toBe(false)
+  })
+
   it('allows concurrency and load factor to be cleared before entering replacement values', async () => {
     const account = {
       ...buildAccount(),

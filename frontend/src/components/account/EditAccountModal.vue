@@ -2011,6 +2011,24 @@
         />
       </div>
 
+      <!-- 账号 UA 由凭据母账号管理，影子账号不提供独立覆盖。 -->
+      <div v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label for="edit-codex-user-agent" class="input-label" :title="t('admin.accounts.openai.accountUserAgentHint')">
+          {{ t('admin.accounts.openai.accountUserAgent') }}
+        </label>
+        <input
+          id="edit-codex-user-agent"
+          v-model="codexUserAgent"
+          data-testid="edit-codex-user-agent"
+          type="text"
+          class="input font-mono text-sm"
+          maxlength="1024"
+          autocomplete="off"
+          :spellcheck="false"
+          :placeholder="t('admin.accounts.openai.accountUserAgentPlaceholder')"
+        />
+      </div>
+
       <!-- OpenAI OAuth 客户端访问策略 -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -3267,6 +3285,7 @@ const umqModeOptions = computed(() => [
 ])
 const tlsFingerprintEnabled = ref(false)
 const rejectExternalHistory = ref(false)
+const codexUserAgent = ref('')
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 const tlsFingerprintRouterId = ref<number | null>(null)
@@ -3853,6 +3872,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAllowClaudeCodeEnabled.value = false
   openAIOAuthClientPolicy.value = 'any'
   codexFingerprintMode.value = 'off'
+  codexUserAgent.value = typeof newAccount.credentials?.user_agent === 'string'
+    ? newAccount.credentials.user_agent
+    : ''
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5202,7 +5224,10 @@ const handleSubmit = async () => {
     if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
-      updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
+      const newCredentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
+      // 空字符串显式触发凭据更新，由后端删除覆盖；不能漏进 len(credentials)==0 的分支。
+      newCredentials.user_agent = codexUserAgent.value.trim()
+      updatePayload.credentials = newCredentials
     }
 
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)

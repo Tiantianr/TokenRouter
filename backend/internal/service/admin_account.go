@@ -538,6 +538,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if err := normalizeCNProviderCredentials(account, true); err != nil {
 		return nil, err
 	}
+	if err := normalizeOpenAIAccountUserAgent(account); err != nil {
+		return nil, err
+	}
 	if err := normalizeOpenAIAPIKeyConfiguration(account); err != nil {
 		return nil, err
 	}
@@ -753,6 +756,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, incomingCredentials)
+		if err := normalizeOpenAIAccountUserAgent(account); err != nil {
+			return nil, err
+		}
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
