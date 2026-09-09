@@ -7,6 +7,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -322,8 +323,22 @@ func (e *EasyPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 		"act": "order", "pid": e.config["pid"],
 		"key": e.config["pkey"], "out_trade_no": tradeNo,
 	}
-	body, statusCode, err := e.postRaw(ctx, e.apiBase()+"/api.php", params)
+	// 易支付查单从 URL 查询参数读取商户信息；POST 表单可能得到 HTTP 200 空响应。
+	query := url.Values{}
+	for key, value := range params {
+		query.Set(key, value)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.apiBase()+"/api.php?"+query.Encode(), nil)
 	if err != nil {
+		return nil, fmt.Errorf("easypay query: invalid request URL")
+	}
+	body, statusCode, err := e.requestRaw(req)
+	if err != nil {
+		// GET 地址包含商户密钥，移除传输错误中的 URL，保留超时和取消等底层原因。
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return nil, fmt.Errorf("easypay query: %w", err)
 	}
 	return parseEasyPayQueryResponse(statusCode, body, tradeNo, e.MerchantIdentityMetadata())
@@ -587,6 +602,11 @@ func (e *EasyPay) postRaw(ctx context.Context, endpoint string, params map[strin
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return e.requestRaw(req)
+}
+
+// requestRaw 统一执行请求，保留支付接口的超时与响应大小限制。
+func (e *EasyPay) requestRaw(req *http.Request) ([]byte, int, error) {
 	client := e.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: easypayHTTPTimeout}

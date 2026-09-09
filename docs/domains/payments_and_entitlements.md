@@ -64,6 +64,8 @@ PENDING -> PROCESSING -> PAID -> RECHARGING -> COMPLETED
 
 普通用户取消、管理员普通取消和后台超时关闭都保持 fail-closed：无法查询上游状态时，接口返回 `PAYMENT_STATUS_UNAVAILABLE`，订单继续为 `PENDING`，不能把可能已付款的订单直接关闭。失败首次写入 `PAYMENT_CANCEL_FAILED` 审计，并刷新订单 `updated_at`；超时 worker 仅在上次失败超过 15 分钟后重试，避免错误地址或暂时故障导致每分钟重复查单。
 
+易支付查单使用 `GET /api.php`，通过 URL 编码传递 `act=order`、商户号、密钥及商户订单号，以兼容仅从查询参数取值的渠道。创建支付和退款仍使用各自的 POST 接口。查单传输错误不得记录含密钥的完整 URL；HTTP 200 空响应仍按无法确认支付状态处理，不能视为未付款。
+
 管理员可针对单笔 `PENDING` 订单调用强制过期操作，提交 1 至 500 个字符的原因。该操作不访问上游，在同一事务内使用条件更新写入 `EXPIRED` 并记录 `ORDER_FORCE_EXPIRED` 审计；审计写入或提交失败时必须整体回滚，状态已变化时返回冲突。它是明确的人工恢复手段，不替代普通取消或自动过期策略。有效的迟到付款通知仍可从 `EXPIRED` 进入 `PAID` 并按既有幂等履约流程处理。
 
 存在仍为 `EXPIRED` 的 `ORDER_FORCE_EXPIRED` 订单时，原 provider instance 可以禁用，但不能硬删除。回调验证和迟到付款恢复仍需要该实例的历史凭据；订单恢复到非过期状态后，这项强制保留约束自动解除。

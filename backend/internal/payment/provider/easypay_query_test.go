@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,7 +15,8 @@ import (
 func TestEasyPayQueryOrderStatusMapping(t *testing.T) {
 	t.Parallel()
 
-	const orderID = "order-123"
+	// 特殊字符必须经 URL 编码后完整传到上游。
+	const orderID = "order-123+ &/?中文"
 	tests := []struct {
 		name        string
 		body        string
@@ -85,8 +87,8 @@ func TestEasyPayQueryOrderStatusMapping(t *testing.T) {
 
 			var gotForm url.Values
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					t.Errorf("method = %q, want %q", r.Method, http.MethodPost)
+				if r.Method != http.MethodGet {
+					t.Errorf("method = %q, want %q", r.Method, http.MethodGet)
 				}
 				if r.URL.Path != "/api.php" {
 					t.Errorf("path = %q, want /api.php", r.URL.Path)
@@ -94,8 +96,11 @@ func TestEasyPayQueryOrderStatusMapping(t *testing.T) {
 				if err := r.ParseForm(); err != nil {
 					t.Errorf("ParseForm: %v", err)
 				}
-				gotForm = make(url.Values, len(r.PostForm))
-				for key, values := range r.PostForm {
+				if len(r.PostForm) != 0 {
+					t.Error("查单参数不应放入 POST 表单")
+				}
+				gotForm = make(url.Values, len(r.URL.Query()))
+				for key, values := range r.URL.Query() {
 					gotForm[key] = append([]string(nil), values...)
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -128,6 +133,23 @@ func TestEasyPayQueryOrderStatusMapping(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 取消请求产生的传输错误不能把含商户密钥的查询 URL 写入日志。
+func TestEasyPayQueryOrderTransportErrorRedactsCredentials(t *testing.T) {
+	t.Parallel()
+	provider := newTestEasyPay(t, "http://127.0.0.1:1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := provider.QueryOrder(ctx, "private-order")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	for _, secret := range []string{"pkey-1", "pid-1", "private-order", "http://", "key="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("传输错误泄露请求信息: %v", err)
+		}
 	}
 }
 
