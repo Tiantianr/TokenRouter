@@ -2,10 +2,12 @@ package handler
 
 import (
 	"github.com/TokenFlux/TokenRouter/internal/handler/admin"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 )
 
 // AdminHandlers contains all admin-related HTTP handlers
 type AdminHandlers struct {
+	PromptAudit           *securityaudit.PromptAdminHandler
 	Dashboard             *admin.DashboardHandler
 	User                  *admin.UserHandler
 	Group                 *admin.GroupHandler

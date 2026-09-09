@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 // QoderGatewayHandler 处理 Qoder 原生网关请求。
 type QoderGatewayHandler struct {
+	promptAudit             *securityaudit.Coordinator
 	gatewayService          *service.GatewayService
 	qoderGatewayService     *service.QoderGatewayService
 	billingCacheService     *service.BillingCacheService
@@ -129,6 +131,21 @@ func (h *QoderGatewayHandler) handle(c *gin.Context, endpoint qoderEndpoint) {
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
+	// Qoder 使用同一客户端协议审计，不能因平台分派绕过提示词检测。
+	if h.promptAudit != nil {
+		protocol := service.ContentModerationProtocolOpenAIChat
+		if endpoint == qoderEndpointMessages {
+			protocol = service.ContentModerationProtocolAnthropicMessages
+		}
+		if endpoint == qoderEndpointResponses {
+			protocol = service.ContentModerationProtocolOpenAIResponses
+		}
+		input := buildContentModerationInput(c, apiKey, subject, protocol, reqModel, body)
+		if decision := runPromptAudit(c, input, h.promptAudit); decision != nil && decision.Blocked {
+			h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message, endpoint)
+			return
+		}
+	}
 	channelMapping := service.ChannelMappingResult{MappedModel: reqModel}
 	if h.gatewayService != nil {
 		channelMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)

@@ -703,7 +703,7 @@ export default {
         ignoreCountTokensErrorsHint: '启用后，count_tokens 请求的错误将不会写入错误日志。',
         ignoreContextCanceled: '忽略客户端断连错误',
         ignoreContextCanceledHint:
-          '启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志。',
+          '启用后，未明确分类的 context canceled 错误不写入日志；状态码 499 的请求取消仍保留并显示。',
         ignoreNoAvailableAccounts: '忽略无可用账号错误',
         ignoreNoAvailableAccountsHint: '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
         ignoreInsufficientBalanceErrors: '忽略余额不足错误',

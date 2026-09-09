@@ -147,6 +147,8 @@ export default {
     paymentConfig: '支付配置',
     paymentPlans: '订阅套餐',
     riskControl: '风控中心',
+    securityAudit: '安全审计',
+    promptAudit: '提示词审计',
     auditLogs: '操作日志'
   },
 // Auth

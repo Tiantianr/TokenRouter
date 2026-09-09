@@ -15,6 +15,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/handler"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/repository"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"github.com/TokenFlux/TokenRouter/internal/server"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -24,8 +25,9 @@ import (
 )
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	PromptAudit *securityaudit.PromptService
+	Server      *http.Server
+	Cleanup     func()
 }
 
 // @project-doc docs/architecture/system_architecture.md#dependency_layers
@@ -40,6 +42,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		repository.ProviderSet,
 		service.ProviderSet,
 		payment.ProviderSet,
+		securityaudit.ProviderSet,
 		middleware.ProviderSet,
 		handler.ProviderSet,
 
@@ -56,7 +59,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PromptAudit", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -119,6 +122,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	cnUsageMonitor *service.CNProviderBalanceCheckService,
+	promptAudit *securityaudit.PromptService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -131,6 +135,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行；持久化刷写服务在基础设施关闭前按顺序停止。
 		parallelSteps := []cleanupStep{
+			{"PromptAudit", func() error {
+				if promptAudit != nil {
+					return promptAudit.Shutdown(ctx)
+				}
+				return nil
+			}},
 			{"CNUsageMonitor", func() error {
 				if cnUsageMonitor != nil {
 					cnUsageMonitor.Stop()

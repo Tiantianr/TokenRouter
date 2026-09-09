@@ -500,6 +500,8 @@ func (in ContentModerationInput) Hash() string {
 }
 
 type ContentModerationDecision struct {
+	// 联合提示词审核保留稳定错误码，未设置时沿用内容策略错误。
+	ErrorCode       string             `json:"error_code,omitempty"`
 	Allowed         bool               `json:"allowed"`
 	Blocked         bool               `json:"blocked"`
 	Flagged         bool               `json:"flagged"`

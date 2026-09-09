@@ -45,6 +45,7 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		return
 	}
 	clientModel := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
+	auditSession := append([]byte(nil), request.Session...)
 	redirectCtx, model := apiKeyModelRedirectContext(c.Request.Context(), apiKey, clientModel)
 	if model != clientModel {
 		request.Session, err = sjson.SetBytes(request.Session, "model", model)
@@ -68,16 +69,16 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
-	// fork 未保留上游统一安全审计模块，Live 请求继续走现有内容审核链路。
+	// 使用 Live 的规范提取器审核原始会话，模型映射不改变审计证据。
 	setOpenAICyberWarningRequestSnapshot(c, service.ContentModerationProtocolOpenAIResponses, request.Session)
 	if decision := h.checkContentModeration(
 		c,
 		reqLog,
 		apiKey,
 		subject,
-		service.ContentModerationProtocolOpenAIResponses,
-		model,
-		request.Session,
+		"openai_live",
+		clientModel,
+		auditSession,
 	); decision != nil && decision.Blocked {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
 		return
@@ -251,7 +252,7 @@ func (h *OpenAIGatewayHandler) LiveSideband(c *gin.Context) {
 		return
 	}
 	defer func() { _ = downstream.CloseNow() }()
-	if err := h.gatewayService.ProxyLiveSideband(c.Request.Context(), record, downstream); err != nil {
+	if err := h.gatewayService.ProxyLiveSideband(c.Request.Context(), record, downstream, h.promptSidebandAudit(c, apiKey, record.RequestedModel, downstream)); err != nil {
 		_ = downstream.Close(coderws.StatusInternalError, "live sideband closed")
 		return
 	}

@@ -1,0 +1,246 @@
+package securityaudit
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/auditcontent"
+)
+
+const (
+	EventConfigUpdated              = "prompt_audit.config_updated"
+	EventConfigLoaded               = "prompt_guard.config_loaded"
+	EventConfigReloadDegraded       = "prompt_guard.config_reload_degraded"
+	EventConfigTokenInvalid         = "prompt_guard.config_token_invalid"
+	EventProbeStarted               = "prompt_audit.endpoint_probe_started"
+	EventProbeFinished              = "prompt_audit.endpoint_probe_finished"
+	EventProbeFailed                = "prompt_audit.endpoint_probe_failed"
+	EventJobEnqueued                = "prompt_audit.job_enqueued"
+	EventEnqueueSkipped             = "prompt_audit.enqueue_skipped"
+	EventEnqueueDropped             = "prompt_audit.enqueue_dropped"
+	EventExtractionFailed           = "prompt_audit.extraction_failed"
+	EventAllowReceiptFailed         = "prompt_audit.allow_receipt_failed"
+	EventRecoveryRequired           = "prompt_audit.recovery_required"
+	EventRecoveryCleared            = "prompt_audit.recovery_cleared"
+	EventRecoveryRetained           = "prompt_audit.recovery_retained"
+	EventRecoveryWaitStarted        = "prompt_audit.recovery_wait_started"
+	EventRecoveryWaitFinished       = "prompt_audit.recovery_wait_finished"
+	EventRecoveryStateFailed        = "prompt_audit.recovery_state_failed"
+	EventAuditStarted               = "prompt_audit.started"
+	EventProcessingReclaimed        = "prompt_audit.processing_reclaimed"
+	EventProcessed                  = "prompt_audit.processed"
+	EventProcessFailed              = "prompt_audit.process_failed"
+	EventFindingRecorded            = "prompt_audit.finding_recorded"
+	EventChunkStarted               = "prompt_audit.scan_chunk_started"
+	EventChunkCompleted             = "prompt_audit.scan_chunk_completed"
+	EventChunkFailed                = "prompt_audit.scan_chunk_failed"
+	EventChunksAggregated           = "prompt_audit.scan_chunks_aggregated"
+	EventEvaluationStarted          = "prompt_guard.evaluation_started"
+	EventGuardAllowed               = "prompt_guard.allowed"
+	EventGuardBlocked               = "prompt_guard.blocked"
+	EventGuardFailed                = "prompt_guard.failed"
+	EventGuardFailureAllowed        = "prompt_guard.failure_allowed"
+	EventResultRecordFailed         = "prompt_guard.result_record_failed"
+	EventFailureRecordFailed        = "prompt_audit.failure_record_failed"
+	EventEventDeleted               = "prompt_audit.event_deleted"
+	EventEventsDeleted              = "prompt_audit.events_deleted"
+	EventDeletePreviewed            = "prompt_audit.events_delete_previewed"
+	EventEventsFilterDeleted        = "prompt_audit.events_filter_deleted"
+	EventChatRetentionCleaned       = "prompt_audit.chat_retention_cleaned"
+	EventChatRetentionCleanupFailed = "prompt_audit.chat_retention_cleanup_failed"
+)
+
+var knownLogEvents = map[string]struct{}{
+	EventConfigUpdated: {}, EventConfigLoaded: {}, EventConfigReloadDegraded: {}, EventConfigTokenInvalid: {},
+	EventProbeStarted: {}, EventProbeFinished: {}, EventProbeFailed: {},
+	EventJobEnqueued: {}, EventEnqueueSkipped: {}, EventEnqueueDropped: {}, EventExtractionFailed: {}, EventAllowReceiptFailed: {},
+	EventRecoveryRequired: {}, EventRecoveryCleared: {}, EventRecoveryRetained: {}, EventRecoveryWaitStarted: {}, EventRecoveryWaitFinished: {}, EventRecoveryStateFailed: {},
+	EventAuditStarted: {}, EventProcessingReclaimed: {}, EventProcessed: {}, EventProcessFailed: {}, EventFindingRecorded: {},
+	EventChunkStarted: {}, EventChunkCompleted: {}, EventChunkFailed: {}, EventChunksAggregated: {},
+	EventEvaluationStarted: {}, EventGuardAllowed: {}, EventGuardBlocked: {}, EventGuardFailed: {}, EventGuardFailureAllowed: {}, EventResultRecordFailed: {}, EventFailureRecordFailed: {},
+	EventEventDeleted: {}, EventEventsDeleted: {}, EventDeletePreviewed: {}, EventEventsFilterDeleted: {},
+	EventChatRetentionCleaned: {}, EventChatRetentionCleanupFailed: {},
+}
+
+var allowedLogFields = map[string]struct{}{
+	"request_id": {}, "user_id": {}, "api_key_id": {}, "group_id": {}, "provider": {},
+	"protocol": {}, "endpoint": {}, "model": {}, "job_id": {}, "event_id": {},
+	"config_version": {}, "guard_endpoint_id": {}, "decision": {}, "risk_level": {},
+	"action": {}, "chunk_index": {}, "chunk_total": {}, "chunk_chars": {}, "input_chars": {},
+	"input_limit": {}, "latency_ms": {}, "status": {}, "error_code": {}, "error_kind": {},
+	"queue_length": {}, "queue_capacity": {}, "stage": {}, "upstream_dispatched": {},
+	"billing_preconsumed": {}, "worker_id": {}, "reclaimed_total": {}, "attempts": {},
+	"max_attempts": {}, "claim_version": {}, "http_status": {}, "retryable": {},
+	"body_bytes": {}, "incomplete_reasons": {}, "failure_nodes": {},
+	"recovery_source": {},
+	"deleted_count":   {},
+}
+
+func LogInfo(event string, fields map[string]any) {
+	if _, ok := knownLogEvents[event]; !ok {
+		return
+	}
+	slog.LogAttrs(context.Background(), slog.LevelInfo, event, safeAttrs(fields)...)
+}
+func LogWarn(event string, fields map[string]any) {
+	if _, ok := knownLogEvents[event]; !ok {
+		return
+	}
+	slog.LogAttrs(context.Background(), slog.LevelWarn, event, safeAttrs(fields)...)
+}
+func LogError(event string, fields map[string]any) {
+	if _, ok := knownLogEvents[event]; !ok {
+		return
+	}
+	slog.LogAttrs(context.Background(), slog.LevelError, event, safeAttrs(fields)...)
+}
+
+func safeAttrs(fields map[string]any) []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(fields))
+	for key, value := range fields {
+		key = strings.TrimSpace(key)
+		if _, allowed := allowedLogFields[key]; !allowed {
+			continue
+		}
+		if key == "incomplete_reasons" {
+			reasons, ok := value.([]auditcontent.IncompleteReason)
+			if !ok {
+				continue
+			}
+			value = auditcontent.SanitizeIncompleteReasons(reasons)
+		}
+		if key == "failure_nodes" {
+			details, ok := value.([]auditcontent.ExtractionFailureDetail)
+			if !ok {
+				continue
+			}
+			value = auditcontent.SanitizeExtractionFailureDetails(details)
+		}
+		if text, ok := value.(string); ok {
+			if key == "error_kind" || key == "error_code" {
+				value = stableErrorCode(text)
+			} else {
+				value = TrimRunes(strings.TrimSpace(text), 256)
+			}
+		}
+		attrs = append(attrs, slog.Any(key, value))
+	}
+	return attrs
+}
+
+func mergeLogFields(base map[string]any, extra map[string]any) map[string]any {
+	result := make(map[string]any, len(base)+len(extra))
+	for key, value := range base {
+		result[key] = value
+	}
+	for key, value := range extra {
+		result[key] = value
+	}
+	return result
+}
+
+func requestLogFields(req Request) map[string]any {
+	stage := strings.TrimSpace(req.Stage)
+	if stage == "" {
+		stage = "http"
+	}
+	return map[string]any{
+		"request_id": req.RequestID, "user_id": req.UserID, "api_key_id": req.APIKeyID,
+		"group_id": pointerLogID(req.GroupID), "provider": req.Provider, "protocol": req.Protocol,
+		"endpoint": req.Endpoint, "model": req.Model, "stage": stage, "body_bytes": len(req.Body),
+	}
+}
+
+func logPromptExtractionFailure(req Request, diagnostic promptExtractionDiagnostic) {
+	code := diagnostic.ErrorCode
+	if strings.TrimSpace(code) == "" {
+		code = "content_extraction_failed"
+	}
+	LogWarn(EventExtractionFailed, mergeLogFields(requestLogFields(req), map[string]any{
+		"status": "failed", "error_code": code, "error_kind": "content_extraction",
+		"incomplete_reasons": diagnostic.Reasons,
+		"failure_nodes":      auditcontent.DescribeExtractionFailures(req.Body, diagnostic.Reasons),
+	}))
+}
+
+func logPromptRequestFailure(req Request, kind DecisionKind, code string) {
+	LogWarn(EventGuardFailed, mergeLogFields(requestLogFields(req), map[string]any{
+		"decision": kind, "status": "failed", "error_code": code, "error_kind": "audit_dependency",
+		"upstream_dispatched": false, "billing_preconsumed": false,
+	}))
+}
+
+func promptRuntimeLogFields() map[string]any {
+	return map[string]any{
+		"request_id": "", "endpoint": "runtime", "protocol": "internal",
+		"stage": "runtime", "body_bytes": 0,
+	}
+}
+
+func logPromptRuntimeFailure(event, code string) {
+	LogWarn(event, mergeLogFields(promptRuntimeLogFields(), map[string]any{
+		"status": "failed", "error_code": code, "error_kind": "audit_dependency",
+	}))
+}
+
+func snapshotLogFields(snapshot PromptSnapshot) map[string]any {
+	stage := strings.TrimSpace(snapshot.Stage)
+	if stage == "" {
+		stage = "http"
+	}
+	return map[string]any{
+		"request_id": snapshot.RequestID, "user_id": snapshot.UserID, "api_key_id": snapshot.APIKeyID,
+		"group_id": pointerLogID(snapshot.GroupID), "provider": snapshot.Provider, "protocol": snapshot.Protocol,
+		"endpoint": snapshot.Endpoint, "model": snapshot.Model, "stage": stage, "body_bytes": snapshot.BodyBytes,
+	}
+}
+
+func jobLogFields(job *Job) map[string]any {
+	if job == nil {
+		return map[string]any{}
+	}
+	fields := snapshotLogFields(job.Snapshot)
+	fields["job_id"] = job.ID
+	fields["config_version"] = job.ConfigVersion
+	fields["claim_version"] = job.ClaimVersion
+	return fields
+}
+
+func stableErrorCode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if code == "" {
+		return "unknown_error"
+	}
+	for _, char := range code {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return "redacted_error"
+	}
+	return TrimRunes(code, 64)
+}
+
+func stableErrorMessage(code string) string {
+	switch stableErrorCode(code) {
+	case ErrorCodeBlocked:
+		return "Prompt Guard blocked the request"
+	case ErrorCodeUnavailable, "payload_store_unavailable", "payload_missing":
+		return "Prompt Audit dependency is unavailable"
+	case ErrorCodeInvalidResponse:
+		return "Prompt Guard returned an invalid response"
+	case "queue_full", "queue_admission_busy":
+		return "Prompt Audit queue is unavailable"
+	case "worker_panic":
+		return "Prompt Audit worker failed"
+	case "config_load_failed", "config_ttl_reload_failed", "config_invalidation_reload_failed":
+		return "Prompt Audit configuration could not be loaded"
+	default:
+		return "Prompt Audit operation failed"
+	}
+}
+
+func sanitizeStoredError(code string) (string, string) {
+	stableCode := stableErrorCode(code)
+	return stableCode, TrimRunes(stableErrorMessage(stableCode), 160)
+}

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"io"
 	"net/http"
 	"strconv"
@@ -17,9 +19,10 @@ import (
 )
 
 type BatchImageHandler struct {
-	service  *service.BatchImagePublicService
-	download *service.BatchImageDownloadService
-	cleanup  *service.BatchImageCleanupService
+	promptAudit *securityaudit.Coordinator
+	service     *service.BatchImagePublicService
+	download    *service.BatchImageDownloadService
+	cleanup     *service.BatchImageCleanupService
 }
 
 func NewBatchImageHandler(service *service.BatchImagePublicService, download *service.BatchImageDownloadService, cleanup *service.BatchImageCleanupService) *BatchImageHandler {
@@ -39,6 +42,25 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 	}
 	if sessionID := service.ExtractClientSessionID(c); sessionID != "" {
 		req.SessionID = &sessionID
+	}
+	// 所有批次条目合并为一次审核，在创建任务、冻结额度或调用上游前完成。
+	if h.promptAudit != nil {
+		key, _ := middleware.GetAPIKeyFromContext(c)
+		subject, _ := middleware.GetAuthSubjectFromContext(c)
+		messages := make([]map[string]string, 0, len(req.Items))
+		for _, item := range req.Items {
+			messages = append(messages, map[string]string{"role": "user", "content": item.Prompt})
+		}
+		body, err := json.Marshal(map[string]any{"messages": messages})
+		if err != nil {
+			batchImageError(c, service.ErrBatchImageInvalidItems)
+			return
+		}
+		input := buildContentModerationInput(c, key, subject, service.ContentModerationProtocolOpenAIChat, req.Model, body)
+		if decision := runPromptAudit(c, input, h.promptAudit); decision != nil && decision.Blocked {
+			c.JSON(contentModerationStatus(decision), gin.H{"error": gin.H{"code": contentModerationErrorCode(decision), "message": decision.Message}})
+			return
+		}
 	}
 	got, err := h.service.Submit(c.Request.Context(), owner, req, c.GetHeader("Idempotency-Key"))
 	if err != nil {

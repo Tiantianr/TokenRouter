@@ -17,6 +17,9 @@ export function mapErrorCategory(phase?: string | null, errType?: string | null)
       return 'internal'
     case 'request':
       switch ((errType || '').toLowerCase()) {
+        // 与后端取消分类一致，列表和筛选均保留这类记录。
+        case 'request_canceled':
+          return 'request_canceled'
         case 'rate_limit_error':
           return 'rate_limit'
         case 'billing_error':

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -13,10 +14,10 @@ import (
 )
 
 func (h *GatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
-	if h == nil || h.contentModerationService == nil {
+	if h == nil {
 		return nil
 	}
-	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body, h.promptAudit)
 }
 
 func contentModerationStatus(decision *service.ContentModerationDecision) int {
@@ -27,6 +28,9 @@ func contentModerationStatus(decision *service.ContentModerationDecision) int {
 }
 
 func contentModerationErrorCode(decision *service.ContentModerationDecision) string {
+	if decision != nil && decision.ErrorCode != "" {
+		return decision.ErrorCode
+	}
 	return "content_policy_violation"
 }
 
@@ -55,10 +59,10 @@ func clientRequestedUsageFields(c *gin.Context, mapping service.ChannelMappingRe
 }
 
 func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
-	if h == nil || h.contentModerationService == nil {
+	if h == nil {
 		return nil
 	}
-	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body, h.promptAudit)
 }
 
 func (h *OpenAIGatewayHandler) recordOpenAICyberWarning(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, account *service.Account, model string, statusCode int, responseBody []byte, warningText string) {
@@ -214,11 +218,17 @@ func setOpenAICyberWarningPromptExcerpt(c *gin.Context, promptExcerpt string) {
 	c.Set(openAICyberWarningPromptExcerptKey, strings.TrimSpace(promptExcerpt))
 }
 
-func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
-	if svc == nil || c == nil || c.Request == nil {
+func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte, coordinators ...*securityaudit.Coordinator) *service.ContentModerationDecision {
+	if c == nil || c.Request == nil {
 		return nil
 	}
 	input := buildContentModerationInput(c, apiKey, subject, protocol, model, body)
+	if len(coordinators) > 0 && coordinators[0] != nil {
+		return runPromptAudit(c, input, coordinators[0])
+	}
+	if svc == nil {
+		return nil
+	}
 	if reqLog != nil {
 		reqLog.Info("content_moderation.gateway_check_start",
 			zap.String("request_id", input.RequestID),

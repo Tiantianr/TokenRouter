@@ -757,6 +757,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 	ctx context.Context,
 	record *LiveCallRecord,
 	downstream *coderws.Conn,
+	audit ...func(context.Context, []byte) error,
 ) error {
 	if record == nil || downstream == nil {
 		return ErrLiveCallNotFound
@@ -801,6 +802,13 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 			if readErr != nil {
 				errCh <- readErr
 				return
+			}
+			// 原始帧先审计再转换；不能用二进制帧封装 JSON 绕过同一边界。
+			if len(audit) > 0 && audit[0] != nil {
+				if err := audit[0](proxyCtx, payload); err != nil {
+					errCh <- err
+					return
+				}
 			}
 			if messageType == coderws.MessageText {
 				rewritten, clientModel, internalModels, rewriteErr := s.rewriteLiveSidebandClientPayload(proxyCtx, record, account, payload)

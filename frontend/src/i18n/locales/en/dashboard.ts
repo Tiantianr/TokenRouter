@@ -523,6 +523,7 @@ export default {
       categories: {
         auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
         invalid_request: 'Invalid request', service_unavailable: 'Service unavailable',
+        request_canceled: 'Request canceled',
         cyber: 'Cyber policy', upstream: 'Upstream error', internal: 'Platform error', other: 'Other',
       },
       detail: {

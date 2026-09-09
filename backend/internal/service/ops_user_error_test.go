@@ -16,6 +16,7 @@ func TestMapUserErrorCategory(t *testing.T) {
 		{"request", "billing_error", "quota"},
 		{"request", "subscription_error", "quota"},
 		{"request", "invalid_request_error", "invalid_request"},
+		{"request", "request_canceled", "request_canceled"},
 		{"request", "cyber_policy", "cyber"},
 		{"request", "cyber_policy_session_blocked", "cyber"},
 		{"routing", "api_error", "service_unavailable"},
@@ -33,6 +34,10 @@ func TestMapUserErrorCategory(t *testing.T) {
 }
 
 func TestCategoryToFilter(t *testing.T) {
+	// 取消分类必须能精确筛选，不能回退为未过滤的全部错误。
+	if phases, types := CategoryToFilter("request_canceled"); len(phases) != 1 || phases[0] != "request" || len(types) != 1 || types[0] != "request_canceled" {
+		t.Fatalf("request_canceled => phases=%v types=%v", phases, types)
+	}
 	phases, types := CategoryToFilter("rate_limit")
 	if len(types) != 1 || types[0] != "rate_limit_error" || len(phases) != 0 {
 		t.Fatalf("rate_limit => phases=%v types=%v", phases, types)

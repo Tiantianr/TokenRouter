@@ -528,6 +528,7 @@ export default {
       categories: {
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
         invalid_request: '参数错误', service_unavailable: '服务暂时不可用',
+        request_canceled: '请求取消',
         cyber: 'Cyber 风控', upstream: '上游错误', internal: '平台错误', other: '其他',
       },
       detail: {

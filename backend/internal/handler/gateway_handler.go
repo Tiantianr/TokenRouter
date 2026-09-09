@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"math"
 	"net/http"
 	"strconv"
@@ -39,6 +40,7 @@ var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
+	promptAudit               *securityaudit.Coordinator
 	gatewayService            *service.GatewayService
 	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService

@@ -394,6 +394,16 @@ func TestLiveSidebandRewritesEachSessionModelAndRestoresResponse(t *testing.T) {
 }
 
 func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
+	testProxyLiveSidebandAudit(t, false)
+}
+
+// 真实侧带连接中审核拒绝必须发生在上游写入前。
+func TestProxyLiveSidebandAuditRejectsBeforeWrite(t *testing.T) {
+	testProxyLiveSidebandAudit(t, true)
+}
+
+func testProxyLiveSidebandAudit(t *testing.T, reject bool) {
+	t.Helper()
 	profileService, routerService := newLiveTLSRoutingServices()
 	account := &Account{
 		ID:          11,
@@ -447,7 +457,12 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 			return
 		}
 		defer func() { _ = downstream.CloseNow() }()
-		proxyResult <- service.ProxyLiveSideband(request.Context(), record, downstream)
+		proxyResult <- service.ProxyLiveSideband(request.Context(), record, downstream, func(context.Context, []byte) error {
+			if reject {
+				return errors.New("prompt_audit_test_blocked")
+			}
+			return nil
+		})
 	}))
 	defer server.Close()
 
@@ -462,6 +477,15 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"client.text"}`)))
+	if reject {
+		require.EqualError(t, <-proxyResult, "prompt_audit_test_blocked")
+		select {
+		case frame := <-upstream.writes:
+			t.Fatalf("审核拒绝后仍写入上游: %v", frame.messageType)
+		default:
+		}
+		return
+	}
 	clientText := <-upstream.writes
 	require.Equal(t, coderws.MessageText, clientText.messageType)
 	require.JSONEq(t, `{"type":"client.text"}`, string(clientText.payload))

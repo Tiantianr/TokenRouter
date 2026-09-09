@@ -194,7 +194,7 @@ func (s *OpenAIGatewayService) HandleGrokRealtimeUpstreamError(ctx context.Conte
 	_ = s.applyGrokAccountUpstreamError(ctx, account, statusCode, nil, body)
 }
 
-func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream) (bool, error) {
+func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream, audit ...func(context.Context, []byte) error) (bool, error) {
 	if s == nil || client == nil || upstream == nil || upstream.conn == nil {
 		return false, fmt.Errorf("realtime connection is required")
 	}
@@ -241,6 +241,13 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 			if unmarshalErr := json.Unmarshal(msg, &raw); unmarshalErr != nil {
 				errCh <- fmt.Errorf("invalid realtime event: %w", unmarshalErr)
 				return
+			}
+			// 审计回调在任何客户端事件写入上游前运行，不能被转发协程绕过。
+			if len(audit) > 0 && audit[0] != nil {
+				if err := audit[0](ctx, msg); err != nil {
+					errCh <- err
+					return
+				}
 			}
 			if writeErr := conn.WriteJSON(ctx, raw); writeErr != nil {
 				errCh <- writeErr

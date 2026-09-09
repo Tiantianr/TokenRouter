@@ -702,7 +702,7 @@ export default {
         ignoreCountTokensErrors: 'Ignore count_tokens errors',
         ignoreCountTokensErrorsHint: 'When enabled, errors from count_tokens requests will not be written to the error log.',
         ignoreContextCanceled: 'Ignore client disconnect errors',
-        ignoreContextCanceledHint: 'When enabled, client disconnect (context canceled) errors will not be written to the error log.',
+        ignoreContextCanceledHint: 'When enabled, unclassified context canceled errors are omitted. Requests classified as canceled with status 499 remain visible.',
         ignoreNoAvailableAccounts: 'Ignore no available accounts errors',
         ignoreNoAvailableAccountsHint: 'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
         ignoreInsufficientBalanceErrors: 'Ignore Insufficient Balance Errors',

@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"io"
 	"net/http"
 	"runtime/debug"
@@ -31,6 +32,7 @@ import (
 
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
+	promptAudit                *securityaudit.Coordinator
 	gatewayService             *service.OpenAIGatewayService
 	billingCacheService        *service.BillingCacheService
 	apiKeyService              *service.APIKeyService

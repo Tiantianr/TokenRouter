@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/handler/admin"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 
 	"github.com/google/wire"
@@ -45,9 +46,11 @@ func ProvideAdminHandlers(
 	auditLogHandler *admin.AuditLogHandler,
 	teamHandler *admin.TeamHandler,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
+	promptAudit *securityaudit.PromptAdminHandler,
 ) *AdminHandlers {
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	return &AdminHandlers{
+		PromptAudit:           promptAudit,
 		Dashboard:             dashboardHandler,
 		User:                  userHandler,
 		Group:                 groupHandler,
@@ -163,7 +166,13 @@ func ProvideHandlers(
 	teamHandler *TeamHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
+	coordinator *securityaudit.Coordinator,
 ) *Handlers {
+	// 在已有协议审核入口注入协调器，不改变直接构造 handler 的测试接口。
+	gatewayHandler.promptAudit = coordinator
+	openaiGatewayHandler.promptAudit = coordinator
+	qoderGatewayHandler.promptAudit = coordinator
+	batchImageHandler.promptAudit = coordinator
 	return &Handlers{
 		Auth:             authHandler,
 		User:             userHandler,

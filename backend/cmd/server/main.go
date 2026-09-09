@@ -155,6 +155,10 @@ func runMainServer() {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
 	defer app.Cleanup()
+	// 审计配置加载和后台队列在接收请求前启动；阻断配置失效由引擎明确处理。
+	if err := app.PromptAudit.Start(context.Background()); err != nil {
+		log.Printf("Prompt audit startup degraded: %v", err)
+	}
 
 	// 启动服务器
 	go func() {

@@ -109,6 +109,7 @@ func RegisterAdminRoutes(
 
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
+		registerPromptAuditRoutes(admin, h)
 
 		// 邀请返利
 		registerAffiliateRoutes(admin, h)

@@ -14,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/handler/admin"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/repository"
+	"github.com/TokenFlux/TokenRouter/internal/securityaudit"
 	"github.com/TokenFlux/TokenRouter/internal/server"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -286,7 +287,14 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	teamService := service.NewTeamService(teamRepository, userRepository, emailService, apiKeyCache, teamInvitationLimiter, settingService, configConfig)
 	teamHandler := admin.NewTeamHandler(teamService)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, qoderOAuthHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, tlsFingerprintRouterHandler, adminAPIKeyHandler, scheduledTestHandler, channelHandler, contentModerationHandler, paymentHandler, affiliateHandler, codexInviteResetHandler, auditLogHandler, teamHandler, ollamaCloudUsageService)
+	configManager := securityaudit.NewConfigManager(db, settingRepository, redisClient, secretEncryptor, configConfig)
+	postgreSQLRepository := securityaudit.NewPostgreSQLRepository(db)
+	redisPayloadStore := securityaudit.NewRedisPayloadStore(redisClient)
+	openAICompatibleScanner := securityaudit.NewOpenAICompatibleScanner()
+	atomicMetrics := securityaudit.NewAtomicMetrics()
+	promptService := securityaudit.NewPromptService(configManager, postgreSQLRepository, redisPayloadStore, openAICompatibleScanner, atomicMetrics)
+	promptAdminHandler := securityaudit.NewPromptAdminHandler(promptService)
+	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, qoderOAuthHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, tlsFingerprintRouterHandler, adminAPIKeyHandler, scheduledTestHandler, channelHandler, contentModerationHandler, paymentHandler, affiliateHandler, codexInviteResetHandler, auditLogHandler, teamHandler, ollamaCloudUsageService, promptAdminHandler)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -317,7 +325,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	handlerTeamHandler := handler.NewTeamHandler(teamService)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
-	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, batchImageHandler, creativeHandler, handlerTeamHandler, idempotencyCoordinator, idempotencyCleanupService)
+	legacyEngine := securityaudit.NewLegacyModerationAdapter(contentModerationService)
+	coordinator := securityaudit.NewCoordinator(legacyEngine, promptService)
+	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, batchImageHandler, creativeHandler, handlerTeamHandler, idempotencyCoordinator, idempotencyCleanupService, coordinator)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService, auditLogService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)
@@ -342,10 +352,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	cnProviderBalanceCheckService := service.ProvideCNProviderBalanceCheckService(accountRepository, upstreamUsageService, configConfig, leaderLockCache, db)
-	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService)
+	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService, promptService)
 	application := &Application{
-		Server:  httpServer,
-		Cleanup: v3,
+		Server:      httpServer,
+		PromptAudit: promptService,
+		Cleanup:     v3,
 	}
 	return application, nil
 }
@@ -353,8 +364,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 // wire.go:
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	PromptAudit *securityaudit.PromptService
+	Server      *http.Server
+	Cleanup     func()
 }
 
 func providePrivacyClientFactory() service.PrivacyClientFactory {
@@ -415,6 +427,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	cnUsageMonitor *service.CNProviderBalanceCheckService,
+	promptAudit *securityaudit.PromptService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -426,6 +439,12 @@ func provideCleanup(
 		}
 
 		parallelSteps := []cleanupStep{
+			{"PromptAudit", func() error {
+				if promptAudit != nil {
+					return promptAudit.Shutdown(ctx)
+				}
+				return nil
+			}},
 			{"CNUsageMonitor", func() error {
 				if cnUsageMonitor != nil {
 					cnUsageMonitor.Stop()

@@ -314,6 +314,44 @@ func TestOpenAIHistoryOpsKeepsLocalAttribution(t *testing.T) {
 	require.Equal(t, "external_history_not_allowed", streamErrors[0].Code)
 }
 
+// 归属写入取消必须可见，且不得覆盖真正的超时或数据库故障。
+func TestOpenAIHistoryCanceledErrorRecorded(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			setupOpsErrorLogTestQueue(t, 4)
+			c, w := historyHTTPContext(t, `{"model":"gpt-5.1","input":"hello"}`)
+			if stream {
+				c.Writer.WriteHeaderNow()
+			}
+			c.Set(service.OpsUpstreamStatusCodeKey, 502)
+			err := fmt.Errorf("%w: save binding: %w", service.ErrOpenAIHistoryUnavailable, context.Canceled)
+			h := &OpenAIGatewayHandler{}
+			require.True(t, h.handleOpenAIHistoryError(c, err, false, stream))
+			require.Contains(t, w.Body.String(), "request_canceled")
+			require.NotContains(t, w.Body.String(), "conversation_ownership_unavailable")
+			if !stream {
+				require.Equal(t, 499, w.Code)
+			}
+			ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			logOpsStreamError(c, ops, w.Code)
+			require.Equal(t, int64(1), OpsErrorLogQueueLength())
+			entry := (<-opsErrorLogQueue).entry
+			require.Equal(t, 499, entry.StatusCode)
+			require.Equal(t, "request_canceled", entry.ErrorType)
+			require.Equal(t, "request", entry.ErrorPhase)
+			require.Equal(t, "client", entry.ErrorOwner)
+			require.True(t, entry.IsBusinessLimited)
+			require.Equal(t, "P3", entry.Severity)
+		})
+	}
+	for _, cause := range []error{context.DeadlineExceeded, errors.New("database unavailable")} {
+		status, _, code, _, ok := openAIHistoryErrorDetails(fmt.Errorf("%w: %w", service.ErrOpenAIHistoryUnavailable, cause))
+		require.True(t, ok)
+		require.Equal(t, 503, status)
+		require.Equal(t, "conversation_ownership_unavailable", code)
+	}
+}
+
 func TestOpenAIHistoryCompatibilityAndCount(t *testing.T) {
 	for _, tc := range []struct {
 		path, body string

@@ -714,6 +714,12 @@ const adminNavItems = computed((): NavItem[] => {
       icon: ShieldIcon,
       featureFlag: () => appStore.cachedPublicSettings?.risk_control_enabled === true
     },
+    {
+      path: '/admin/prompt-audit',
+      label: t('nav.promptAudit'),
+      icon: ShieldIcon,
+      featureFlag: () => appStore.cachedPublicSettings?.risk_control_enabled === true
+    },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.affiliate_enabled === true

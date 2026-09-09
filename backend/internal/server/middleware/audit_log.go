@@ -17,6 +17,7 @@ type AuditLogMiddleware gin.HandlerFunc
 
 // 审计相关 gin context 覆写键：handler / 认证中间件可通过这些键补充审计信息。
 const (
+	auditCtxKeyExtra      = "audit_extra"
 	auditCtxKeyAction     = "audit_action"
 	auditCtxKeyActorID    = "audit_actor_id"
 	auditCtxKeyActorEmail = "audit_actor_email"
@@ -26,6 +27,11 @@ const (
 	// ContextKeySessionID 认证中间件写入的会话 ID（refresh token family）。
 	ContextKeySessionID = "session_id"
 )
+
+// SetAuditExtra 保存管理操作的结构化结果，调用方只能提供脱敏后的元数据。
+func SetAuditExtra(c *gin.Context, extra map[string]any) {
+	c.Set(auditCtxKeyExtra, extra)
+}
 
 // SetAuditAction 允许 handler / 中间件为当前请求指定审计动作名（覆盖自动推导）。
 func SetAuditAction(c *gin.Context, action string) {
@@ -49,17 +55,19 @@ func SkipAudit(c *gin.Context) {
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
 var auditSensitiveReads = map[string]string{
-	"GET /api/v1/admin/accounts/data":             "admin.accounts.export",
-	"GET /api/v1/admin/proxies/data":              "admin.proxies.export",
-	"GET /api/v1/admin/redeem-codes/export":       "admin.redeem_codes.export",
-	"GET /api/v1/admin/backups/:id/download-url":  "admin.backups.download",
-	"GET /api/v1/admin/backups/:id/download":      "admin.backups.download",
-	"GET /api/v1/admin/settings/admin-api-key":    "admin.admin_api_key.read",
-	"GET /api/v1/admin/users/:id/api-keys":        "admin.users.api_keys.read",
-	"GET /api/v1/admin/groups/:id/api-keys":       "admin.groups.api_keys.read",
-	"GET /api/v1/admin/backups/s3-config":         "admin.backups.s3_config.read",
-	"GET /api/v1/admin/backups/storage-config":    "admin.backups.storage_config.read",
-	"GET /api/v1/admin/data-management/s3/config": "admin.data_management.s3_config.read",
+	"GET /api/v1/admin/prompt-audit/events/:id":         "admin.prompt_audit.event.read",
+	"GET /api/v1/admin/prompt-audit/events/:id/context": "admin.prompt_audit.context.download",
+	"GET /api/v1/admin/accounts/data":                   "admin.accounts.export",
+	"GET /api/v1/admin/proxies/data":                    "admin.proxies.export",
+	"GET /api/v1/admin/redeem-codes/export":             "admin.redeem_codes.export",
+	"GET /api/v1/admin/backups/:id/download-url":        "admin.backups.download",
+	"GET /api/v1/admin/backups/:id/download":            "admin.backups.download",
+	"GET /api/v1/admin/settings/admin-api-key":          "admin.admin_api_key.read",
+	"GET /api/v1/admin/users/:id/api-keys":              "admin.users.api_keys.read",
+	"GET /api/v1/admin/groups/:id/api-keys":             "admin.groups.api_keys.read",
+	"GET /api/v1/admin/backups/s3-config":               "admin.backups.s3_config.read",
+	"GET /api/v1/admin/backups/storage-config":          "admin.backups.storage_config.read",
+	"GET /api/v1/admin/data-management/s3/config":       "admin.data_management.s3_config.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
@@ -85,6 +93,8 @@ var auditActionOverrides = map[string]string{
 // auditBodyOmittedRoutes 请求体几乎整体由凭证构成的路由（如整块粘贴 auth JSON 的导入接口）。
 // 这类 body 的凭证内嵌在普通字符串值里，键级脱敏无法覆盖，整体不入库。
 var auditBodyOmittedRoutes = map[string]struct{}{
+	"PUT /api/v1/admin/prompt-audit/config":                     {},
+	"POST /api/v1/admin/prompt-audit/endpoints/probe":           {},
 	"POST /api/v1/auth/passkey/login/finish":                    {},
 	"POST /api/v1/user/passkeys/register/finish":                {},
 	"POST /api/v1/admin/accounts/import/codex-session":          {},
@@ -203,6 +213,13 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 		entry.CredentialMasked = MaskedRequestCredential(c)
 
 		extra := map[string]any{}
+		if value, ok := c.Get(auditCtxKeyExtra); ok {
+			if fields, ok := value.(map[string]any); ok {
+				for key, value := range fields {
+					extra[key] = value
+				}
+			}
+		}
 		if len(c.Params) > 0 {
 			params := make(map[string]string, len(c.Params))
 			for _, p := range c.Params {

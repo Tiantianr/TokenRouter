@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -671,6 +672,35 @@ func TestLogOpsStreamError_NoopWhenNotMarked(t *testing.T) {
 	logOpsStreamError(c, ops, http.StatusOK)
 
 	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
+}
+
+// 兼容已有取消标记：wire 200 与无响应体 499 都必须在错误列表中可见。
+func TestOpsErrorLoggerCanceledRequestsVisible(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			setupOpsErrorLogTestQueue(t, 4)
+			ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			router := gin.New()
+			router.Use(OpsErrorLoggerMiddleware(ops))
+			router.POST("/v1/responses", func(c *gin.Context) {
+				if stream {
+					service.MarkOpsStreamError(c, "api_error", "context canceled", 499)
+					c.Status(200)
+				} else {
+					c.Status(499)
+				}
+			})
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+			require.Equal(t, int64(1), OpsErrorLogQueueLength())
+			entry := (<-opsErrorLogQueue).entry
+			require.Equal(t, 499, entry.StatusCode)
+			require.Equal(t, "request_canceled", entry.ErrorType)
+			require.Equal(t, "client", entry.ErrorOwner)
+			require.True(t, entry.IsBusinessLimited)
+			require.NotEmpty(t, entry.ErrorMessage)
+		})
+	}
 }
 
 // 命中 skip_monitoring=true 透传规则时不落库，与其它采集分支一致。

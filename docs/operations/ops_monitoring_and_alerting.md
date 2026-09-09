@@ -19,6 +19,8 @@ Ops 面同时接收请求错误、独立上游 attempt 错误、入口准入拒�
 
 系统日志 sink 与 request/error capture 使用有界队列。拥塞时按各自策略丢弃或降级，并累计 dropped/health 计数；它们不得反压网关核心转发。系统日志落库失败会执行 2 秒起、60 秒封顶的指数退避，退避窗口内的批次计入 dropped 而不访问数据库，成功后立即清除失败状态。敏感字段在进入存储前清理，request ID、平台、Group、账号和 endpoint 用于关联。
 
+明确的 HTTP/流式逻辑 499 记录为 `request_canceled`、P3，管理端和用户端显示“请求取消”，可按分类或状态码筛选；记录归于客户端请求并排除平台 SLA 失败。`IgnoreContextCanceled` 只过滤未明确分类的取消文本，不隐藏逻辑 499；其它监控开关和过滤仍生效。普通错误不能仅因请求后来断连而改写为取消，归属失败需保留 `context.Canceled` 错误链作为依据。历史记录不自动回填。
+
 ## 实时与历史查询
 
 管理员 Ops API 提供 concurrency、user concurrency、account availability、realtime traffic、错误/上游错误/请求详情、入口拒绝、系统日志和 dashboard snapshot/trend/histogram/token stats。错误列表与详情弹窗必须共享当前时间范围；自定义范围使用同一组 `start_time` / `end_time` 半开区间，任一边界缺失时统一回退到 `1h`，不能把字面量 `custom` 传给后端。QPS WebSocket 用于短窗口实时展示，仍需管理员鉴权，不能视为长期审计源。

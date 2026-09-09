@@ -147,6 +147,8 @@ export default {
     paymentConfig: 'Payment Config',
     paymentPlans: 'Plans',
     riskControl: 'Risk Control',
+    securityAudit: 'Security Audit',
+    promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs'
   },
 // Auth

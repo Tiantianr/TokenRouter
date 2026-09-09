@@ -78,6 +78,11 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	reqLog = reqLog.With(zap.String("model", requestedModel))
 	setOpsRequestContext(c, requestedModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
+	// 原生搜索与后续协议转换共用原始输入审核，不能只审计变换后的部分字段。
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, "openai_alpha_search", requestedModel, body); decision != nil && decision.Blocked {
+		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, requestedModel)
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)

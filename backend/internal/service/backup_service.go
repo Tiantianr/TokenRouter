@@ -1468,7 +1468,8 @@ func (s *BackupService) buildExcludedTableData(cfg *BackupContentConfig) []strin
 		cfg = &defaultCfg
 	}
 
-	var excluded []string
+	// 提示词内容与事件元数据分开备份，保留可恢复的检测记录，不导出会话正文。
+	excluded := []string{"public.prompt_audit_chat_records", "public.prompt_audit_event_contexts"}
 	if !cfg.IncludeUsageRecords {
 		excluded = append(excluded, backupContentTableDataGroups["usage_records"]...)
 	}

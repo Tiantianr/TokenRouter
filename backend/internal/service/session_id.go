@@ -5,11 +5,40 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // maxPersistedSessionIDLength 将客户端会话标识限制在 usage_logs.session_id 的
 // VARCHAR(255) 宽度内；超长值直接拒绝，避免不同标识因截断而混为一体。
 const maxPersistedSessionIDLength = 255
+
+// ExtractClientSessionIdentityWithBody 仅为审计聚合读取显式会话，不使用共享提示缓存键。
+func ExtractClientSessionIdentityWithBody(c *gin.Context, body []byte) (string, string) {
+	if c == nil || c.Request == nil {
+		return "", ""
+	}
+	for _, header := range clientSessionIDHeaders {
+		if value := sanitizeSessionID(c.GetHeader(header)); value != "" {
+			return value, "header:" + strings.ToLower(header)
+		}
+	}
+	if isGrokRequestContext(c) {
+		if value := sanitizeSessionID(c.GetHeader(grokConversationIDHeader)); value != "" {
+			return value, "grok_conversation_header"
+		}
+	}
+	if gjson.ValidBytes(body) {
+		for _, path := range []string{"conversation_id", "thread_id", "response.conversation_id", "response.thread_id"} {
+			value := gjson.GetBytes(body, path)
+			if value.Type == gjson.String {
+				if clean := sanitizeSessionID(value.String()); clean != "" {
+					return clean, "body:" + path
+				}
+			}
+		}
+	}
+	return "", ""
+}
 
 // clientSessionIDHeaders 在 OpenAI 兼容粘性会话头的基础上加入原生协议标识；
 // 这些标识可以安全持久化，但不得改变 OpenAI 调度行为。

@@ -1153,7 +1153,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		// 按设置过滤无需记录的错误。
-		if shouldSkipOpsErrorLog(c.Request.Context(), ops, parsed.Message, string(body), c.Request.URL.Path) {
+		if shouldSkipOpsErrorLog(c.Request.Context(), ops, parsed.Message, string(body), c.Request.URL.Path, status) {
 			return
 		}
 
@@ -1191,6 +1191,13 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		normalizedType := normalizeOpsErrorType(parsed.ErrorType, parsed.Code, parsed.Message)
+		// 已明确标记的 499（包括无响应体的断连）统一保留为请求取消。
+		if status == statusClientClosedRequest {
+			normalizedType = "request_canceled"
+			if strings.TrimSpace(parsed.Message) == "" {
+				parsed.Message = "Request canceled."
+			}
+		}
 
 		phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, normalizedType, parsed.Message, parsed.Code, status)
 
@@ -1435,7 +1442,7 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 	}
 
 	// 复用与 status>=400 分支相同的设置过滤（context canceled / 无可用账号等）。
-	if shouldSkipOpsErrorLog(c.Request.Context(), ops, streamErr.Message, streamErr.Message, c.Request.URL.Path) {
+	if shouldSkipOpsErrorLog(c.Request.Context(), ops, streamErr.Message, streamErr.Message, c.Request.URL.Path, streamErr.IntendedStatus) {
 		return
 	}
 
@@ -1445,9 +1452,12 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		classifyStatus = wireStatus
 	}
 	normalizedType := normalizeOpsErrorType(streamErr.ErrType, streamErr.Code, streamErr.Message)
+	if classifyStatus == statusClientClosedRequest {
+		normalizedType = "request_canceled"
+	}
 	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, normalizedType, streamErr.Message, streamErr.Code, classifyStatus)
 	recordedStatus := wireStatus
-	if streamErr.CountTowardsSLA && streamErr.IntendedStatus >= 400 {
+	if (streamErr.CountTowardsSLA && streamErr.IntendedStatus >= 400) || streamErr.IntendedStatus == statusClientClosedRequest {
 		recordedStatus = streamErr.IntendedStatus
 	}
 	errorBody := ""
@@ -2108,6 +2118,7 @@ func guessPlatformFromPath(path string) string {
 func isKnownOpsErrorType(t string) bool {
 	switch t {
 	case "invalid_request_error",
+		"request_canceled",
 		"authentication_error",
 		"permission_error",
 		"model_not_found",
@@ -2188,6 +2199,8 @@ func classifyOpsPhase(errType, message, code string) string {
 
 func classifyOpsSeverity(errType string, status int) string {
 	switch errType {
+	case "request_canceled":
+		return "P3"
 	case "invalid_request_error", "authentication_error", "permission_error", "forbidden_error", "not_found_error", "model_not_found", "billing_error", "subscription_error":
 		return "P3"
 	}
@@ -2205,6 +2218,13 @@ func classifyOpsSeverity(errType string, status int) string {
 
 // classifyOpsErrorLog 汇总上游错误上下文与本地路由标记，生成统一的 Ops 统计口径。
 func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status int) (phase string, isBusinessLimited bool, errorOwner string, errorSource string) {
+	if c != nil && c.GetBool("ops_prompt_audit_blocked") && status == http.StatusForbidden {
+		return "request", true, "client", "gateway"
+	}
+	// 取消仍保留错误记录和逻辑 499，但不计入平台可用性失败；旧上游尝试不能覆盖归因。
+	if status == statusClientClosedRequest && errType == "request_canceled" {
+		return "request", true, "client", "client_request"
+	}
 	if isOpsOpenAIHistoryRejection(c, message) {
 		return "routing", true, "platform", "gateway"
 	}
@@ -2462,7 +2482,7 @@ func strconvItoa(v int) string {
 
 // shouldSkipOpsErrorLog determines if an error should be skipped from logging based on settings.
 // Returns true for errors that should be filtered according to OpsAdvancedSettings.
-func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message, body, requestPath string) bool {
+func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message, body, requestPath string, intendedStatus ...int) bool {
 	if ops == nil {
 		return false
 	}
@@ -2480,7 +2500,9 @@ func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message
 	}
 
 	// Check if context canceled errors should be ignored (client disconnects)
-	if settings.IgnoreContextCanceled {
+	// 明确的逻辑 499 必须展示；旧开关仅过滤尚未归类的取消文本噪声。
+	retainCancellation := len(intendedStatus) > 0 && intendedStatus[0] == statusClientClosedRequest
+	if settings.IgnoreContextCanceled && !retainCancellation {
 		if strings.Contains(msgLower, opsErrContextCanceled) || strings.Contains(bodyLower, opsErrContextCanceled) {
 			return true
 		}

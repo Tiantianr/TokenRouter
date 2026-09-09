@@ -54,6 +54,9 @@ func (h *OpenAIGatewayHandler) prepareOpenAIHistory(c *gin.Context, apiKey *serv
 
 func openAIHistoryErrorDetails(err error) (int, string, string, string, bool) {
 	switch {
+	// 保留归属错误链中的取消原因，避免把已终止请求误报为存储故障。
+	case errors.Is(err, service.ErrOpenAIHistoryUnavailable) && errors.Is(err, context.Canceled):
+		return statusClientClosedRequest, "request_canceled", "request_canceled", "Request canceled while recording conversation ownership.", true
 	case errors.Is(err, service.ErrOpenAIExternalHistory):
 		return http.StatusBadRequest, "invalid_request_error", "external_history_not_allowed", service.ErrOpenAIExternalHistory.Error(), true
 	case errors.Is(err, service.ErrOpenAIHistoryUnavailable):

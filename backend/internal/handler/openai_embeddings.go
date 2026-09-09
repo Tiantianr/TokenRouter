@@ -74,6 +74,11 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	reqLog = reqLog.With(zap.String("model", reqModel))
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
+	// 嵌入文本同样属于客户端提示词，必须在并发和账务检查前送审。
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, "openai_embeddings", reqModel, body); decision != nil && decision.Blocked {
+		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 
