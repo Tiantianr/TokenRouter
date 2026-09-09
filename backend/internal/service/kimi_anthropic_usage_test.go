@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
@@ -231,12 +232,19 @@ func TestCNProviderAnthropicUsageBillsUncachedInput(t *testing.T) {
 			uncachedInput := max(openAIUsage.InputTokens-openAIUsage.CacheReadInputTokens-openAIUsage.CacheCreationInputTokens, 0)
 			require.Equal(t, tt.wantInput, uncachedInput)
 
-			cost, err := billing.CalculateCost(tt.model, UsageTokens{
-				InputTokens:         uncachedInput,
-				OutputTokens:        openAIUsage.OutputTokens,
-				CacheCreationTokens: openAIUsage.CacheCreationInputTokens,
-				CacheReadTokens:     openAIUsage.CacheReadInputTokens,
-			}, 1)
+			// 固定低谷时刻，本测试只验证未缓存输入口径，不依赖 CI 执行时段。
+			cost, err := billing.CalculateCostUnified(CostInput{
+				Model:          tt.model,
+				Resolver:       NewModelPricingResolver(nil, billing),
+				PricingAt:      time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC),
+				RateMultiplier: 1,
+				Tokens: UsageTokens{
+					InputTokens:         uncachedInput,
+					OutputTokens:        openAIUsage.OutputTokens,
+					CacheCreationTokens: openAIUsage.CacheCreationInputTokens,
+					CacheReadTokens:     openAIUsage.CacheReadInputTokens,
+				},
+			})
 			require.NoError(t, err)
 			require.Positive(t, cost.InputCost, "uncached input must contribute to the final charge")
 

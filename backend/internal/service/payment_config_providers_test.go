@@ -684,10 +684,12 @@ func TestProviderDraftTestUsesStoredSensitiveConfigWithoutPersistingDraft(t *tes
 	ctx := context.Background()
 	var receivedProbe string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, r.ParseForm())
-		require.Equal(t, "pid-test", r.PostForm.Get("pid"))
-		require.Equal(t, "pkey-test", r.PostForm.Get("key"))
-		receivedProbe = r.PostForm.Get("out_trade_no")
+		// 草稿探测与实际查单一致，使用 GET 参数并复用保存的商户密钥。
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "order", r.URL.Query().Get("act"))
+		require.Equal(t, "pid-test", r.URL.Query().Get("pid"))
+		require.Equal(t, "pkey-test", r.URL.Query().Get("key"))
+		receivedProbe = r.URL.Query().Get("out_trade_no")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":0,"msg":"not found"}`))
 	}))
