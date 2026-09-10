@@ -28,6 +28,8 @@ OpenAI OAuth 账号的 `extra.codex_fingerprint_mode` 控制 Codex Responses 的
 
 身份解析使用投影前的输入，当前请求或 WS 帧的 flat/内嵌 `client_metadata` 优先于建连头；同一 session 下的父子线程在 `session` 模式中分别派生。客户端提供真实 turn 时，按凭据所有者及 API Key 稳定映射，`root_turn_id`、`parent_turn_id` 和父线程引用使用对应的同一映射；未提供 turn 才生成新值。复合窗口保留 `thread:window_number` 的序号，复合子代理缓存键保留前缀并映射其中的线程。已有兼容别名同步到同一身份，真实时间戳在合法时保留。普通转换与 OAuth passthrough 都遵守这些关系，透传大 body 只局部改写身份小对象。旧版 `/responses/compact` 不应用额外指纹收敛。
 
+顶层 `client_metadata` 遵守字符串字典约束：网关投影写入的 `window_number`、已有 `turn_started_at_unix_ms` 等标量必须编码为字符串；`x-codex-turn-metadata` 本身是 JSON 字符串，其内部窗口序号和时间戳仍使用数值。解析这两个整数时兼容字符串与 JSON 数值，不能因为表示不同丢失真实窗口号或时间戳。HTTP、HTTP→WS、原生 WS 和 passthrough 的最终出站测试都按字符串字典解码校验，内嵌 JSON 的数值类型另行验证。
+
 关闭额外收敛或仅统一设备时，OAuth 的账号隔离仍生效：原本相等的根 session/thread/request ID 使用同类映射，默认缓存键与 session 保持相等，窗口和父子引用保留关联结构。此关系修正会改变部分旧的投影值，但不修改账号 seed、已保存 UUID 或禁用 override 后的 seed 派生 session。
 
 在 `session` 或 `full` 模式下，管理员还可以在账号测试弹框中开启“指定会话 ID”。该开关默认关闭，不影响已有账号；只有显式保存的 UUID 才替代账号 seed 派生的上游 `session_id`。弹框中的随机 ID 是测试草稿，点击保存前只用于当前测试请求，不写入账号，也不改变正式转发。关闭开关会回到原有 seed 派生 ID，并保留 seed；账号本地会话标识和客户端会话列表不会被改写。该配置只允许凭据母账号使用，影子账号继续继承母账号。

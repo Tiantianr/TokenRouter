@@ -35,6 +35,15 @@ func codexIdentityString(value gjson.Result) string {
 	return ""
 }
 
+// 顶层 metadata 用字符串，内嵌 JSON 可用数值；读取整数时兼容两种表示，
+// 保留数字原文后再校验范围，避免经过 float64 丢失精度。
+func codexIdentityIntegerText(value gjson.Result) string {
+	if value.Type == gjson.Number {
+		return value.Raw
+	}
+	return codexIdentityString(value)
+}
+
 func (s codexClientIdentity) value(names ...string) gjson.Result {
 	for _, metadata := range []gjson.Result{s.body, s.embedded} {
 		for _, name := range names {
@@ -116,8 +125,8 @@ func (s codexClientIdentity) windowNumber() (string, bool) {
 				return number, true
 			}
 		}
-		if v := metadata.Get("window_number"); v.Type == gjson.Number {
-			if n, err := strconv.ParseUint(v.Raw, 10, 32); err == nil {
+		if raw := codexIdentityIntegerText(metadata.Get("window_number")); raw != "" {
+			if n, err := strconv.ParseUint(raw, 10, 32); err == nil {
 				return strconv.FormatUint(n, 10), true
 			}
 		}
@@ -128,8 +137,8 @@ func (s codexClientIdentity) windowNumber() (string, bool) {
 	if _, number, ok := splitCodexWindowID(codexIdentityString(s.header.Get("window_id"))); ok {
 		return number, true
 	}
-	if v := s.header.Get("window_number"); v.Type == gjson.Number {
-		if n, err := strconv.ParseUint(v.Raw, 10, 32); err == nil {
+	if raw := codexIdentityIntegerText(s.header.Get("window_number")); raw != "" {
+		if n, err := strconv.ParseUint(raw, 10, 32); err == nil {
 			return strconv.FormatUint(n, 10), true
 		}
 	}
@@ -195,8 +204,8 @@ func resolveCodexFingerprintIDsForTurn(account *Account, headers http.Header, bo
 		n, _ := strconv.ParseUint(number, 10, 32)
 		ids.lineage["window_number"] = n
 	}
-	if v := source.value("turn_started_at_unix_ms"); v.Type == gjson.Number {
-		if n, err := strconv.ParseInt(v.Raw, 10, 64); err == nil && n > 0 {
+	if raw := codexIdentityIntegerText(source.value("turn_started_at_unix_ms")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
 			ids.turnStartedAtUnixMs = n
 		}
 	}

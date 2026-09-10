@@ -107,6 +107,9 @@ func readCodexSessionWire(t *testing.T, requests <-chan codexSessionWireRequest)
 
 func assertCodexSessionWire(t *testing.T, req codexSessionWireRequest, session string, checkTurnHeader bool) {
 	t.Helper()
+	// 按上游的字符串字典约束解码真实出站 body，不能只比较 ID 的文本值。
+	var flat map[string]string
+	require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(req.body, "client_metadata").Raw), &flat))
 	for field, header := range map[string]string{
 		"session_id": "session_id", "thread_id": "thread-id", "x-codex-installation-id": "x-codex-installation-id",
 	} {
@@ -136,7 +139,7 @@ func TestCodexSessionFlowHTTPToWebSocket(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			c.Request.Header.Set("session-id", "real-client-session")
-			c.Request.Header.Set("x-codex-turn-metadata", `{"session_id":"client-old","turn_id":"client-turn"}`)
+			c.Request.Header.Set("x-codex-turn-metadata", `{"session_id":"client-old","turn_id":"client-turn","window_number":3}`)
 			_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.1","input":"hi","stream":true}`))
 			require.NoError(t, err)
 			want := testCodexSessionOverride
@@ -167,7 +170,7 @@ func TestCodexSessionFlowHTTPAndPassthroughShadow(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			c.Request.Header.Set("session-id", "client-session")
 			c.Request.Header.Set("x-codex-turn-metadata", `{"session_id":"old","turn_id":"old"}`)
-			_, err := svc.Forward(context.Background(), c, shadow, []byte(`{"model":"gpt-5.4","stream":true,"input":"hi","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"old\",\"turn_id\":\"old\"}"}}`))
+			_, err := svc.Forward(context.Background(), c, shadow, []byte(`{"model":"gpt-5.4","stream":true,"input":"hi","client_metadata":{"window_number":"3","turn_started_at_unix_ms":"1700000000000","x-codex-turn-metadata":"{\"session_id\":\"old\",\"turn_id\":\"old\",\"window_number\":3}"}}`))
 			require.NoError(t, err)
 			require.NotNil(t, upstream.lastReq)
 			assertCodexSessionWire(t, codexSessionWireRequest{headers: upstream.lastReq.Header, body: upstream.lastBody}, testCodexSessionOverride, true)

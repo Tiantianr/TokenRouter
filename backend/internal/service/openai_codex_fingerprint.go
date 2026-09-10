@@ -509,11 +509,12 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 
 	for name, value := range codexFingerprintMetadataFields(ids) {
 		if _, exists := existing[name]; exists {
-			existing[name] = value
+			// flat client_metadata 必须为字符串字典，不能复用内嵌 JSON 的数值类型。
+			existing[name] = fmt.Sprint(value)
 		}
 	}
 	for name, value := range ids.lineage {
-		existing[name] = value
+		existing[name] = fmt.Sprint(value)
 	}
 	rewriteCodexIdentityAliases(existing, codexFingerprintMetadataFields(ids))
 	rewriteClientMetadataEmbeddedTurnMetadata(existing, codexFingerprintMetadataFields(ids))

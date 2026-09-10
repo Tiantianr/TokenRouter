@@ -70,6 +70,39 @@ func TestCodexClientIdentityCompositeCacheAndAliases(t *testing.T) {
 	require.Equal(t, ids.turnID, gjson.GetBytes(out, "client_metadata.turn-id").String())
 }
 
+// 顶层 client_metadata 是字符串字典；内嵌 turn metadata 的序号和时间戳保持数值。
+func TestCodexClientMetadataScalarTypes(t *testing.T) {
+	for _, mode := range []string{"session", "full"} {
+		for _, quoted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/quoted=%t", mode, quoted), func(t *testing.T) {
+				account := codexSessionFlowAccount()
+				account.Extra[codexFingerprintModeExtraKey] = mode
+				window, timestamp := "7", "1700000000000"
+				if quoted {
+					window, timestamp = `"7"`, `"1700000000000"`
+				}
+				body := []byte(fmt.Sprintf(`{"client_metadata":{"thread_id":"current-thread","window_number":%s,"turn_started_at_unix_ms":%s,"x-codex-turn-metadata":"{}"}}`, window, timestamp))
+				headers := http.Header{"X-Codex-Window-Id": {"stale-thread:0"}, "X-Codex-Turn-Metadata": {`{}`}}
+				ids := resolveCodexFingerprintIDsForTurn(account, headers, body, 7)
+				out, _, err := applyCodexFingerprintClientMetadataRaw(body, ids)
+				require.NoError(t, err)
+				var flat map[string]string
+				require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(out, "client_metadata").Raw), &flat))
+				require.Equal(t, "7", flat["window_number"])
+				require.Equal(t, "1700000000000", flat["turn_started_at_unix_ms"])
+				require.Equal(t, ids.threadID+":7", flat["x-codex-window-id"])
+				applyCodexFingerprintHeaders(headers, ids)
+				for _, embedded := range []string{flat[openAIWSTurnMetadataHeader], headers.Get(openAIWSTurnMetadataHeader)} {
+					require.Equal(t, gjson.Number, gjson.Get(embedded, "window_number").Type)
+					require.Equal(t, int64(7), gjson.Get(embedded, "window_number").Int())
+					require.Equal(t, gjson.Number, gjson.Get(embedded, "turn_started_at_unix_ms").Type)
+					require.Equal(t, int64(1700000000000), gjson.Get(embedded, "turn_started_at_unix_ms").Int())
+				}
+			})
+		}
+	}
+}
+
 // 关闭额外收敛仍保留账号隔离，但不能把相等的根会话标识映射成不同 UUID。
 func TestCodexAccountIdentityPreservesRelationships(t *testing.T) {
 	account := codexSessionFlowAccount()
