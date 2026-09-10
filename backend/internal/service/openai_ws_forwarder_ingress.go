@@ -74,6 +74,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	// 首帧身份用于后续缺省字段继承，原始请求头仍保留供审计使用。
+	c.Set(codexWSClientIdentityContextKey, readCodexClientIdentity(codexRequestHeaders(c), firstClientMessage))
 	// 复用 Gin 上下文时清理上一个账号留下的工具名称映射。
 	setCodexToolNameReverse(c, nil)
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
@@ -334,14 +336,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" {
+		// 保存真正的当前帧，不能把后补的握手 metadata 当成客户端帧重新解析。
+		accountIdentitySourceRaw := append([]byte(nil), normalized...)
+		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" && !gjson.GetBytes(normalized, "client_metadata."+openAIWSTurnMetadataHeader).Exists() {
 			next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
 			if setErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)
 			}
 			normalized = next
 		}
-		accountIdentitySourceRaw := append([]byte(nil), normalized...)
+		if err := validateCodexWSThread(c, accountIdentitySourceRaw); err != nil {
+			return openAIWSClientPayload{}, err
+		}
+		stageCodexClientIdentity(c, accountIdentitySourceRaw)
 		accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(normalized, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		if scopeErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
@@ -351,7 +358,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if !forceHTTPBridge {
 			// 原生 WS 不经过 HTTP Forward，须在此逐轮生成并暂存收敛身份。
-			next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, normalized)
+			next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, normalized, accountIdentitySourceRaw)
 			if fingerprintErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", fingerprintErr)
 			}
@@ -546,6 +553,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
+	turnStateTurn := codexClientTurnKey(c)
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
@@ -553,12 +561,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	preferredConnID := ""
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
-		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
-		if turnState == "" && stateStore != nil && sessionHash != "" {
-			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
-				turnState = savedTurnState
-			}
-		}
+		sessionHash = codexWSStateScope(c, account)
 
 		preferredConnID = ""
 		if stateStore != nil && payload.previousResponseID != "" {
@@ -728,9 +731,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
 				turnState = bridgeTurnState
-				if stateStore != nil && sessionHash != "" {
-					stateStore.BindSessionTurnState(groupID, sessionHash, bridgeTurnState, s.openAIWSSessionStickyTTL())
-				}
 			}
 			responseID := strings.TrimSpace(result.RequestID)
 			if responseID != "" && stateStore != nil {
@@ -756,6 +756,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return parseErr
 			}
 			currentBridgePayload = nextPayload
+			// 只有同一已知 turn 的重连可使用刚收到的状态；新 turn 必须清空。
+			nextTurn := codexClientTurnKey(c)
+			if nextTurn == "" || nextTurn != turnStateTurn {
+				turnState = ""
+				c.Request.Header.Del(openAIWSTurnStateHeader)
+			}
+			turnStateTurn = nextTurn
+			refreshIngressRouteState(nextPayload)
 		}
 	}
 
@@ -779,9 +787,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	tlsProfile, tlsProfileKey := s.resolveOpenAIWSTLSProfile(account, tlsRouterMatch)
 	baseAcquireReq := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
+		Account:      account,
+		WSURL:        wsURL,
+		Headers:      wsHeaders,
+		IsolationKey: sessionHash,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -930,11 +939,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, acquireErr
 		}
 		connID := strings.TrimSpace(lease.ConnID())
-		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
+		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" && !lease.Reused() {
 			turnState = handshakeTurnState
-			if stateStore != nil && sessionHash != "" {
-				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
-			}
+			s.noteOpenAICodexTurnStateProvenance(c, account, handshakeTurnState)
 			updatedHeaders := cloneHeader(baseAcquireReq.Headers)
 			if updatedHeaders == nil {
 				updatedHeaders = make(http.Header)
@@ -1887,6 +1894,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return parseErr
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
+		nextTurn := codexClientTurnKey(c)
+		if nextTurn == "" || nextTurn != turnStateTurn {
+			turnState = ""
+			c.Request.Header.Del(openAIWSTurnStateHeader)
+			baseAcquireReq.Headers.Del(openAIWSTurnStateHeader)
+		}
+		turnStateTurn = nextTurn
 		if nextPayload.promptCacheKey != "" || stagedCodexFingerprintIDs(c, account) != nil {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
 			// 每轮更新未来重连所用握手头，即使没有 prompt_cache_key 也要同步本轮身份。

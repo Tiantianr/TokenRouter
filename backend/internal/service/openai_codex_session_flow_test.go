@@ -37,10 +37,15 @@ func (d *codexSessionLocalDialer) Dial(ctx context.Context, _ string, headers ht
 	return d.openAIWSClientDialer.Dial(ctx, d.url, headers, "", nil)
 }
 
-func newCodexSessionWireGateway(t *testing.T) (*OpenAIGatewayService, <-chan codexSessionWireRequest) {
+func newCodexSessionWireGateway(t *testing.T, responseHeaders ...http.Header) (*OpenAIGatewayService, <-chan codexSessionWireRequest) {
 	t.Helper()
 	requests := make(chan codexSessionWireRequest, 16)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(responseHeaders) > 0 {
+			for key, values := range responseHeaders[0] {
+				w.Header()[key] = append([]string(nil), values...)
+			}
+		}
 		conn, err := coderws.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -208,8 +213,12 @@ func TestCodexSessionFlowNativeWebSocket(t *testing.T) {
 				t.Cleanup(func() { _ = conn.CloseNow() })
 				return conn
 			}
+			turnNumber := 0
 			sendTurn := func(conn *coderws.Conn) codexSessionWireRequest {
-				require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":"hi","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"old\",\"turn_id\":\"old-turn\"}"}}`)))
+				turnNumber++
+				// 明确提供逐帧身份，验证旧握手不会覆盖新的 turn 和压缩窗口。
+				frame := fmt.Sprintf(`{"type":"response.create","model":"gpt-5.1","input":"hi","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"real-client-session\",\"thread_id\":\"real-client-thread\",\"turn_id\":\"turn-%d\",\"root_turn_id\":\"turn-%d\",\"window_number\":%d}"}}`, turnNumber, turnNumber, turnNumber+2)
+				require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(frame)))
 				_, response, err := conn.Read(ctx)
 				require.NoError(t, err)
 				require.Equal(t, "response.completed", gjson.GetBytes(response, "type").String())
@@ -223,6 +232,8 @@ func TestCodexSessionFlowNativeWebSocket(t *testing.T) {
 			saved.Store(next)
 			second := sendTurn(conn)
 			assertCodexSessionWire(t, second, testCodexSessionOverride, false)
+			require.Equal(t, gjson.GetBytes(first.body, "client_metadata.thread_id").String()+":3", first.headers.Get("x-codex-window-id"))
+			require.Equal(t, gjson.GetBytes(second.body, "client_metadata.thread_id").String()+":4", gjson.GetBytes(second.body, "client_metadata.x-codex-window-id").String())
 			require.NotEqual(t, gjson.GetBytes(first.body, "client_metadata.turn_id").String(), gjson.GetBytes(second.body, "client_metadata.turn_id").String())
 			_ = conn.Close(coderws.StatusNormalClosure, "done")
 			// 新连接读取已保存的新快照，不复用旧会话的握手身份。

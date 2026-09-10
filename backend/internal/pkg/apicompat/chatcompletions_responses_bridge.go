@@ -456,6 +456,18 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			})
 			pendingReasoning = ""
 			continue
+		case "agent_message":
+			// multi_agent_v2 将任务信封和正文分片放入 agent_message。自定义
+			// provider 的 encrypted_content 字段也可承载明文；按顺序保留字段
+			// 文本，不尝试解密或提升为 system 指令，避免任务正文被静默丢弃。
+			text := agentMessageText(item["content"])
+			pendingReasoning = ""
+			lastTurnReasoning = ""
+			if text != "" {
+				content, _ := json.Marshal(text)
+				messages = append(messages, ChatMessage{Role: "user", Content: content})
+			}
+			continue
 		case "input_text", "text":
 			content, _ := json.Marshal(rawString(item["text"]))
 			messages = append(messages, ChatMessage{Role: "user", Content: content})
@@ -504,6 +516,32 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 	}
 
 	return messages, mediaByCallID, nil
+}
+
+// agentMessageText 原序拼接已知文本分片，保留空白和换行，不将未知结构字符串化。
+func agentMessageText(raw json.RawMessage) string {
+	raw = bytesTrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var result strings.Builder
+	for _, part := range parts {
+		switch rawString(part["type"]) {
+		case "input_text", "text":
+			_, _ = result.WriteString(rawString(part["text"]))
+		case "encrypted_content":
+			_, _ = result.WriteString(rawString(part["encrypted_content"]))
+		}
+	}
+	return result.String()
 }
 
 // extractToolOutputMedia 只改写可识别的图片节点。无媒体输出返回 rewritten=false，

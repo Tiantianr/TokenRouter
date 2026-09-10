@@ -20,6 +20,7 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	stageCodexClientIdentity(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -541,9 +542,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			var clientHeaders http.Header
 			if c != nil && c.Request != nil {
-				clientHeaders = c.Request.Header
+				clientHeaders = codexRequestHeaders(c)
 			}
-			fingerprintIDs = resolveCodexFingerprintIDsFromRequest(fingerprintAccount, clientHeaders)
+			stageCodexClientIdentity(c, body)
+			fingerprintIDs = resolveCodexFingerprintIDsForTurn(fingerprintAccount, clientHeaders, body, getAPIKeyIDFromContext(c))
 			// HTTP 转上游 WS 时也必须让握手头与本轮请求体使用同一份身份。
 			stageCodexFingerprintIDs(c, fingerprintIDs)
 			if applyCodexFingerprintClientMetadata(decoded, fingerprintIDs) {

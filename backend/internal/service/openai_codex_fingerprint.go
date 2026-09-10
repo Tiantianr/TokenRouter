@@ -63,12 +63,17 @@ func applyStagedCodexFingerprintClientMetadata(c *gin.Context, account *Account,
 
 // prepareCodexWSFingerprintTurn 每个 response.create 只解析一次身份，重试复用同一结果。
 // 凭据来源在 WS 建连时固定；后续保存配置只影响新连接，避免续聊中途混用身份。
-func prepareCodexWSFingerprintTurn(c *gin.Context, account *Account, body []byte) ([]byte, error) {
+func prepareCodexWSFingerprintTurn(c *gin.Context, account *Account, body []byte, original ...[]byte) ([]byte, error) {
 	var headers http.Header
 	if c != nil && c.Request != nil {
-		headers = c.Request.Header
+		headers = codexRequestHeaders(c)
 	}
-	ids := resolveCodexFingerprintIDsFromRequest(codexAccountIdentitySource(c, account), headers)
+	source := body
+	if len(original) > 0 {
+		source = original[0]
+	}
+	stageCodexClientIdentity(c, source)
+	ids := resolveCodexFingerprintIDsForTurn(codexAccountIdentitySource(c, account), headers, source, getAPIKeyIDFromContext(c))
 	// 包括 off 模式在内均覆盖上下文，防止故障转移残留上一账号身份。
 	stageCodexFingerprintIDs(c, ids)
 	next, _, err := applyCodexFingerprintClientMetadataRaw(body, ids)
@@ -89,8 +94,8 @@ const (
 	// 上游看到 1 台设备 + 多会话（每用户各自的 session）。
 	codexFingerprintDevice codexFingerprintMode = "device"
 	// codexFingerprintSession 收敛 installation_id + session_id，
-	// thread_id 按客户端原始 session-id 确定性派生（每个真实 Codex 会话一个独立线程）。
-	// 上游看到 1 台设备 + 1 会话 + N 线程，最接近正常用户 spawn 子代理的模式。
+	// thread_id 按客户端原始 thread 派生，缺少 thread 时回退 session。
+	// 这是显式的账号级会话策略，不等同于官方根会话身份。
 	codexFingerprintSession codexFingerprintMode = "session"
 	// codexFingerprintFull 收敛所有标识：installation_id + session_id + thread_id。
 	// 上游看到 1 台设备 + 1 会话 + 1 线程，最激进。
@@ -302,11 +307,13 @@ type codexFingerprintIDs struct {
 	turnStartedAtUnixMs           int64
 	originalBodySessionID         string
 	originalBodySessionIDCaptured bool
+	lineage                       map[string]any // 原始回合的父子引用和窗口信息
+	scopedCacheKey                string         // 账号隔离后的复合缓存键
+	convergedCacheKey             string         // 与收敛父线程同源的复合缓存键
 }
 
 // resolveCodexFingerprintIDs 按收敛模式计算出站 ID 集合。
-// clientSessionID 是客户端原始的 session-id 头值（连字符形式），用于 session 模式下
-// 的 thread_id 派生——每个真实 Codex 会话得到一个独立线程。
+// clientSessionID 是解析完成的原始线程种子，优先真实 thread，缺失时使用 session。
 // 返回 nil 表示 off 模式，不需要改写。
 // 注意：包含随机生成的 turn_id，调用方必须只调用一次并共享结果给头改写和体改写。
 func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode codexFingerprintMode) *codexFingerprintIDs {
@@ -381,11 +388,7 @@ func resolveCodexFingerprintIDsFromRequest(account *Account, clientHeaders http.
 	if mode == codexFingerprintOff {
 		return nil
 	}
-	clientSessionID := ""
-	if clientHeaders != nil {
-		clientSessionID = extractClientSessionID(clientHeaders)
-	}
-	return resolveCodexFingerprintIDs(account, clientSessionID, mode)
+	return resolveCodexFingerprintIDsForTurn(account, clientHeaders, nil, 0)
 }
 
 // applyCodexFingerprintHeaders 按预计算的收敛 ID 改写出站 HTTP 头中的设备指纹。
@@ -412,15 +415,21 @@ func applyCodexFingerprintHeaders(h http.Header, ids *codexFingerprintIDs) {
 	h.Set("session-id", ids.sessionID)
 	h.Set("session_id", ids.sessionID)
 	h.Set("thread-id", ids.threadID)
+	for name, value := range map[string]string{"thread_id": ids.threadID, "turn_id": ids.turnID, "turn-id": ids.turnID, "window_id": ids.windowID, "window-id": ids.windowID, "installation_id": ids.installationID} {
+		if h.Get(name) != "" {
+			h.Set(name, value)
+		}
+	}
 
-	rewriteCodexTurnMetadataFields(h, map[string]any{
-		"installation_id":         ids.installationID,
-		"session_id":              ids.sessionID,
-		"thread_id":               ids.threadID,
-		"turn_id":                 ids.turnID,
-		"window_id":               ids.windowID,
-		"turn_started_at_unix_ms": ids.turnStartedAtUnixMs,
-	})
+	if parent, ok := ids.lineage["parent_thread_id"].(string); ok {
+		h.Set("x-codex-parent-thread-id", parent)
+	} else if parent, ok := ids.lineage["x-codex-parent-thread-id"].(string); ok {
+		h.Set("x-codex-parent-thread-id", parent)
+	}
+	if h.Get("conversation_id") != "" {
+		h.Set("conversation_id", ids.sessionID)
+	}
+	rewriteCodexTurnMetadataFields(h, codexFingerprintMetadataFields(ids))
 }
 
 // rewriteCodexTurnMetadataFields 解析 x-codex-turn-metadata 头中的 JSON，
@@ -438,6 +447,7 @@ func rewriteCodexTurnMetadataFields(h http.Header, fields map[string]any) {
 	for k, v := range fields {
 		metadata[k] = v
 	}
+	rewriteCodexIdentityAliases(metadata, fields)
 	rebuilt, err := json.Marshal(metadata)
 	if err != nil {
 		return
@@ -497,14 +507,16 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 	existing["turn_id"] = ids.turnID
 	existing["x-codex-window-id"] = ids.windowID
 
-	rewriteClientMetadataEmbeddedTurnMetadata(existing, map[string]any{
-		"installation_id":         ids.installationID,
-		"session_id":              ids.sessionID,
-		"thread_id":               ids.threadID,
-		"turn_id":                 ids.turnID,
-		"window_id":               ids.windowID,
-		"turn_started_at_unix_ms": ids.turnStartedAtUnixMs,
-	})
+	for name, value := range codexFingerprintMetadataFields(ids) {
+		if _, exists := existing[name]; exists {
+			existing[name] = value
+		}
+	}
+	for name, value := range ids.lineage {
+		existing[name] = value
+	}
+	rewriteCodexIdentityAliases(existing, codexFingerprintMetadataFields(ids))
+	rewriteClientMetadataEmbeddedTurnMetadata(existing, codexFingerprintMetadataFields(ids))
 	return true
 }
 
@@ -520,6 +532,11 @@ func captureCodexFingerprintOriginalBodySessionID(ids *codexFingerprintIDs, clie
 	case map[string]any:
 		if sessionID, ok := metadata["session_id"].(string); ok {
 			ids.originalBodySessionID = strings.TrimSpace(sessionID)
+		}
+		if ids.originalBodySessionID == "" {
+			if embedded, ok := metadata[openAIWSTurnMetadataHeader].(string); ok {
+				ids.originalBodySessionID = codexIdentityString(gjson.Get(embedded, "session_id"))
+			}
 		}
 	case map[string]string:
 		ids.originalBodySessionID = strings.TrimSpace(metadata["session_id"])
@@ -537,6 +554,9 @@ func captureCodexFingerprintOriginalBodySessionIDRaw(ids *codexFingerprintIDs, v
 }
 
 func shouldRewriteCodexFingerprintPromptCacheKey(ids *codexFingerprintIDs, promptCacheKey string) bool {
+	if ids != nil && ids.scopedCacheKey != "" && promptCacheKey == ids.scopedCacheKey {
+		return true
+	}
 	if ids == nil || !ids.originalBodySessionIDCaptured || ids.originalBodySessionID == "" || ids.sessionID == "" {
 		return false
 	}
@@ -554,10 +574,14 @@ func applyCodexFingerprintPromptCacheKey(reqBody map[string]any, ids *codexFinge
 	if !ok || strings.TrimSpace(promptCacheKey) == "" || !shouldRewriteCodexFingerprintPromptCacheKey(ids, promptCacheKey) {
 		return false
 	}
-	if promptCacheKey == ids.sessionID {
+	target := ids.sessionID
+	if promptCacheKey == ids.scopedCacheKey && ids.convergedCacheKey != "" {
+		target = ids.convergedCacheKey
+	}
+	if promptCacheKey == target {
 		return false
 	}
-	reqBody["prompt_cache_key"] = ids.sessionID
+	reqBody["prompt_cache_key"] = target
 	return true
 }
 
@@ -582,7 +606,11 @@ func applyCodexFingerprintClientMetadataRaw(body []byte, ids *codexFingerprintID
 
 	existing := map[string]any{}
 	if cm := gjson.GetBytes(body, "client_metadata"); cm.IsObject() {
-		captureCodexFingerprintOriginalBodySessionIDRaw(ids, gjson.GetBytes(body, "client_metadata.session_id"))
+		session := gjson.GetBytes(body, "client_metadata.session_id")
+		if !session.Exists() {
+			session = gjson.Get(cm.Get(openAIWSTurnMetadataHeader).String(), "session_id")
+		}
+		captureCodexFingerprintOriginalBodySessionIDRaw(ids, session)
 		if err := json.Unmarshal([]byte(cm.Raw), &existing); err != nil {
 			return body, false, fmt.Errorf("decode client_metadata for fingerprint: %w", err)
 		}
@@ -606,7 +634,11 @@ func applyCodexFingerprintClientMetadataRaw(body []byte, ids *codexFingerprintID
 	}
 	promptCacheKey := gjson.GetBytes(body, "prompt_cache_key")
 	if promptCacheKey.Exists() && promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" && shouldRewriteCodexFingerprintPromptCacheKey(ids, promptCacheKey.String()) {
-		rewritten, err := sjson.SetBytes(next, "prompt_cache_key", ids.sessionID)
+		target := ids.sessionID
+		if promptCacheKey.String() == ids.scopedCacheKey && ids.convergedCacheKey != "" {
+			target = ids.convergedCacheKey
+		}
+		rewritten, err := sjson.SetBytes(next, "prompt_cache_key", target)
 		if err != nil {
 			return body, false, fmt.Errorf("splice converged prompt_cache_key: %w", err)
 		}
@@ -631,6 +663,7 @@ func rewriteClientMetadataEmbeddedTurnMetadata(clientMetadata map[string]any, fi
 	for k, v := range fields {
 		metadata[k] = v
 	}
+	rewriteCodexIdentityAliases(metadata, fields)
 	if rebuilt, err := json.Marshal(metadata); err == nil {
 		clientMetadata["x-codex-turn-metadata"] = string(rebuilt)
 	}

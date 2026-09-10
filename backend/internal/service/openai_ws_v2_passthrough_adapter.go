@@ -875,6 +875,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		firstClientMessage = liteFirstMessage
 	}
+	originalFirstIdentity := firstClientMessage
 	accountScopedFirst, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(firstClientMessage, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 	if scopeErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
@@ -883,7 +884,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstClientMessage = accountScopedFirst
 	}
 	// 透传首帧与握手必须共用身份，后续帧只更新逐轮字段。
-	firstClientMessage, scopeErr = prepareCodexWSFingerprintTurn(c, account, firstClientMessage)
+	firstClientMessage, scopeErr = prepareCodexWSFingerprintTurn(c, account, firstClientMessage, originalFirstIdentity)
 	if scopeErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", scopeErr)
 	}
@@ -1193,6 +1194,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					payload = litePayload
 				}
 			}
+			originalFrameIdentity := payload
+			if isResponseCreate {
+				if err := validateCodexWSThread(c, originalFrameIdentity); err != nil {
+					return payload, nil, err
+				}
+			}
 			if isResponseCreate || eventType == "session.update" {
 				accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(payload, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 				if scopeErr != nil {
@@ -1204,7 +1211,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			originalResponseCreate := payload
 			if isResponseCreate {
-				next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, payload)
+				next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, payload, originalFrameIdentity)
 				if fingerprintErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", fingerprintErr)
 				}

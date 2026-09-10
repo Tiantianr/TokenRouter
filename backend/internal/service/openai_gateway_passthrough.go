@@ -85,6 +85,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		reqStream = gjson.GetBytes(body, "stream").Bool()
 
+		originalIdentityBody := body
+		stageCodexClientIdentity(c, originalIdentityBody)
 		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		if scopeErr != nil {
 			return nil, scopeErr
@@ -99,10 +101,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if !isOpenAIResponsesCompactPath(c) {
 			var clientHeaders http.Header
 			if c != nil && c.Request != nil {
-				clientHeaders = c.Request.Header
+				clientHeaders = codexRequestHeaders(c)
 			}
 			// 与普通转发和 WS 共用已经解析的母账号，避免影子账号身份分裂。
-			fingerprintIDs := resolveCodexFingerprintIDsFromRequest(codexAccountIdentitySource(c, account), clientHeaders)
+			fingerprintIDs := resolveCodexFingerprintIDsForTurn(codexAccountIdentitySource(c, account), clientHeaders, originalIdentityBody, getAPIKeyIDFromContext(c))
 			if fingerprintIDs != nil {
 				updatedBody, changed, fingerprintErr := applyCodexFingerprintClientMetadataRaw(body, fingerprintIDs)
 				if fingerprintErr != nil {
@@ -354,7 +356,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// 在各 handler 的写头点强制放行，铸造账号在此统一记录，供出站守卫剥离
 		// failover 换号后的跨账号回带（openai_codex_turn_state.go）。
 		if extractOpenAICodexTurnState(resp.Header) != "" {
-			s.noteOpenAICodexTurnStateProvenance(c, account)
+			s.noteOpenAICodexTurnStateProvenance(c, account, extractOpenAICodexTurnState(resp.Header))
 		}
 
 		if reqStream {

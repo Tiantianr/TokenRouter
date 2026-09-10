@@ -68,7 +68,7 @@ func codexCanonicalUserAgent() string {
 	resolver := codexCanonicalUAResolver
 	codexCanonicalUAMu.RUnlock()
 	if resolver != nil {
-		if value := strings.TrimSpace(resolver()); value != "" {
+		if value := resolver(); strings.TrimSpace(value) != "" {
 			return value
 		}
 	}
@@ -86,8 +86,12 @@ func NormalizeCodexClientVersion(version string) string {
 
 func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 	canonical := codexCanonicalUserAgent()
-	ua := strings.TrimSpace(candidateUA)
-	if ua == "" {
+	if _, _, ok := openai.PairCodexClientIdentity(canonical); !ok {
+		// UA 与版本必须来自同一有效身份，不能从已拒绝的 canonical 借用版本。
+		canonical = codexCLIUserAgent
+	}
+	ua := candidateUA
+	if strings.TrimSpace(ua) == "" {
 		ua = canonical
 	}
 	originator, pairedUA, ok := openai.PairCodexClientIdentity(ua)
@@ -179,8 +183,8 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 	if h == nil || h.Get("originator") == "" {
 		return
 	}
-	candidateUA := strings.TrimSpace(overrideUA)
-	if candidateUA == "" {
+	candidateUA := overrideUA
+	if strings.TrimSpace(candidateUA) == "" {
 		candidateUA = h.Get("user-agent")
 	}
 	originator, pairedUA, ok := openai.PairCodexClientIdentity(candidateUA)

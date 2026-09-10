@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1091,19 +1092,22 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 		},
 	}
 
+	previousResponseID := "resp_prev_reuse"
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 		c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
 		groupID := int64(2001)
-		c.Set("api_key", &APIKey{GroupID: &groupID})
+		c.Set("api_key", &APIKey{ID: 7, GroupID: &groupID})
+		// 标准客户端未提供 Codex thread，仍按已认证 Key 保留显式续链。
 
-		body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_reuse","input":[{"type":"input_text","text":"hello"}]}`)
+		body := []byte(fmt.Sprintf(`{"model":"gpt-5.1","stream":false,"previous_response_id":%q,"input":[{"type":"input_text","text":"hello"}]}`, previousResponseID))
 		result, err := svc.Forward(context.Background(), c, account, body)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.True(t, strings.HasPrefix(result.RequestID, "resp_reuse_"))
+		previousResponseID = result.RequestID
 	}
 
 	// 条件式 MarkBroken：正常终端事件退出后连接归还复用，不再无条件销毁。
@@ -1536,7 +1540,7 @@ func TestOpenAIGatewayService_Forward_WSv1_Unsupported(t *testing.T) {
 	require.Nil(t, upstream.lastReq, "WSv1 不支持时不应触发 HTTP 上游请求")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_TurnStateRequiresClientEchoOnReconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var connIndex atomic.Int64
@@ -1623,7 +1627,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	c1, _ := gin.CreateTestContext(rec1)
 	c1.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c1.Request.Header.Set("session_id", "session_turn_state")
-	c1.Request.Header.Set("x-codex-turn-metadata", "turn_meta_1")
+	c1.Request.Header.Set("x-codex-turn-metadata", `{"turn_id":"same-turn","marker":1}`)
 	result1, err := svc.Forward(context.Background(), c1, account, reqBody)
 	require.NoError(t, err)
 	require.NotNil(t, result1)
@@ -1631,8 +1635,9 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	sessionHash := svc.GenerateSessionHash(c1, reqBody)
 	store := svc.getOpenAIWSStateStore()
 	turnState, ok := store.GetSessionTurnState(0, sessionHash)
-	require.True(t, ok)
-	require.Equal(t, "turn_state_first", turnState)
+	require.False(t, ok, "不再按 session 自动缓存回合状态")
+	require.Empty(t, turnState)
+	require.Equal(t, "turn_state_first", result1.ResponseHeaders.Get(openAICodexTurnStateHeader))
 
 	// 主动淘汰连接，模拟下一次请求发生重连。
 	connID, hasConn := store.GetResponseConn(result1.RequestID)
@@ -1643,15 +1648,17 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	c2, _ := gin.CreateTestContext(rec2)
 	c2.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c2.Request.Header.Set("session_id", "session_turn_state")
-	c2.Request.Header.Set("x-codex-turn-metadata", "turn_meta_2")
+	c2.Request.Header.Set("x-codex-turn-metadata", `{"turn_id":"same-turn","marker":2}`)
+	// 状态只能由客户端显式回带，不能因为同 session 重连而从缓存推定。
+	c2.Request.Header.Set(openAICodexTurnStateHeader, result1.ResponseHeaders.Get(openAICodexTurnStateHeader))
 	result2, err := svc.Forward(context.Background(), c2, account, reqBody)
 	require.NoError(t, err)
 	require.NotNil(t, result2)
 
 	firstHandshakeHeaders := <-headersCh
 	secondHandshakeHeaders := <-headersCh
-	require.Equal(t, "turn_meta_1", firstHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
-	require.Equal(t, "turn_meta_2", secondHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
+	require.JSONEq(t, `{"turn_id":"same-turn","marker":1}`, firstHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
+	require.JSONEq(t, `{"turn_id":"same-turn","marker":2}`, secondHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
 	require.Equal(t, "turn_state_first", secondHandshakeHeaders.Get("X-Codex-Turn-State"))
 }
 
@@ -1966,7 +1973,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 	require.Equal(t, int64(2), upgradeCount.Load(), "不同 session(store=false) 应隔离连接，避免续链状态互相覆盖")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReuse(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnRetainsThreadIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var upgradeCount atomic.Int64
@@ -2061,7 +2068,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 	result2, err := svc.Forward(context.Background(), c2, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result2)
-	require.Equal(t, int64(1), upgradeCount.Load(), "关闭强制新连后，不同 session(store=false) 可复用连接")
+	require.Equal(t, int64(2), upgradeCount.Load(), "关闭强制新连也不能跨原始线程复用连接")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2ReadTimeoutAppliesPerRead(t *testing.T) {

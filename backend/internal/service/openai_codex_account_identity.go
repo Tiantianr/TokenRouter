@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -90,8 +91,7 @@ func isolateOpenAIUpstreamSessionID(apiKeyID int64, account *Account, raw string
 	if namespace == "" {
 		return isolateOpenAISessionID(apiKeyID, raw)
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("u%d:a%s:%s", apiKeyID, namespace, raw)))
-	return fmt.Sprintf("%x", sum[:8])
+	return scopeCodexAccountIdentityValue(account, apiKeyID, "session", raw)
 }
 
 func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw string) string {
@@ -99,6 +99,23 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 	namespace := codexAccountIdentityNamespace(account)
 	if raw == "" || namespace == "" {
 		return raw
+	}
+	// 根会话的 session、thread 和请求关联 ID 本来相等，隔离不能打散关系。
+	if kind == "session" || kind == "request" {
+		kind = "thread"
+	}
+	if kind == "window" {
+		if thread, number, ok := splitCodexWindowID(raw); ok {
+			return scopeCodexAccountIdentityValue(account, apiKeyID, "thread", thread) + ":" + number
+		}
+	}
+	if kind == "prompt-cache" {
+		if prefix, thread, ok := strings.Cut(raw, ":"); ok && len(prefix) <= 64 && prefix != "" {
+			// 子代理缓存键保留来源前缀，仅隔离其中的线程 UUID。
+			if id, err := uuid.Parse(thread); err == nil && id.String() == thread {
+				return prefix + ":" + scopeCodexAccountIdentityValue(account, apiKeyID, "thread", thread)
+			}
+		}
 	}
 	return deriveStableUUIDv4(fmt.Sprintf(
 		"sub2api:codex-account-identity:%s:user:%d:account:%s:kind:%s:value:%s",
@@ -125,6 +142,12 @@ var codexAccountIdentityFields = []struct {
 	{name: "window_id", kind: "window"},
 	{name: "x-codex-window-id", kind: "window"},
 	{name: "x-client-request-id", kind: "request"},
+	{name: "root_turn_id", kind: "turn"},
+	{name: "parent_turn_id", kind: "turn"},
+	{name: "parent_thread_id", kind: "thread"},
+	{name: "x-codex-parent-thread-id", kind: "thread"},
+	{name: "forked_from_thread_id", kind: "thread"},
+	{name: "context_window_id", kind: "context-window"},
 }
 
 func applyCodexAccountIdentityFields(values map[string]any, account *Account, apiKeyID int64) bool {
@@ -174,7 +197,7 @@ func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, acco
 	clientMetadata, _ := requestBody["client_metadata"].(map[string]any)
 	originalBodySessionID := ""
 	if clientMetadata != nil {
-		originalBodySessionID, _ = clientMetadata["session_id"].(string)
+		originalBodySessionID = readCodexClientIdentity(nil, codexIdentityBodyForMap(requestBody)).session()
 		if applyCodexAccountIdentityFields(clientMetadata, account, apiKeyID) {
 			changed = true
 		}
@@ -216,7 +239,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 		if err := json.Unmarshal([]byte(cm.Raw), &clientMetadata); err != nil {
 			return body, false, fmt.Errorf("decode client_metadata for account identity: %w", err)
 		}
-		originalBodySessionID, _ = clientMetadata["session_id"].(string)
+		originalBodySessionID = readCodexClientIdentity(nil, body).session()
 		metadataChanged := applyCodexAccountIdentityFields(clientMetadata, account, apiKeyID)
 		if applyCodexAccountIdentityEmbeddedMetadata(clientMetadata, account, apiKeyID) {
 			metadataChanged = true

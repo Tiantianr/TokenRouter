@@ -3,6 +3,8 @@ package openai
 import (
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // CodexCLIUserAgentPrefixes 定义历史 Codex CLI User-Agent 前缀。
@@ -185,6 +187,10 @@ func matchCodexClientHeaderStrictPrefixes(value string, prefixes []string) bool 
 //     UA 首段后配对，保留真实版本/OS/终端指纹；
 //  3. 均不命中 → ok=false，调用方应整体回退为默认官方身份。
 func PairCodexClientIdentity(userAgent string) (originator string, pairedUA string, ok bool) {
+	// 先校验完整原始值，避免 TrimSpace 隐藏首尾控制字符后被识别为合法身份。
+	if !validCodexUserAgentValue(userAgent) {
+		return "", "", false
+	}
 	ua := strings.TrimSpace(userAgent)
 	slash := strings.IndexByte(ua, '/')
 	if slash <= 0 {
@@ -244,6 +250,9 @@ var codexEngineVersionPattern = regexp.MustCompile(`^(\d+\.\d+\.\d+)`)
 // `{originator}/{X.Y.Z} (...)`，第一个 '/' 后、首个空格或 '(' 前的三段版本。
 // 该版本是 codex-rs CARGO_PKG_VERSION（引擎版本，CLI/app-server 一致）。
 func ParseCodexEngineVersion(ua string) (string, bool) {
+	if !validCodexUserAgentValue(ua) {
+		return "", false
+	}
 	ua = strings.TrimSpace(ua)
 	slash := strings.IndexByte(ua, '/')
 	if slash < 0 {
@@ -262,4 +271,9 @@ func ParseCodexEngineVersion(ua string) (string, bool) {
 		return "", false
 	}
 	return m, true
+}
+
+// UA 必须是单个合法 HTTP 字段值，任何位置的 CR/LF 都不参与身份或版本解析。
+func validCodexUserAgentValue(value string) bool {
+	return httpguts.ValidHeaderFieldValue(value) && !strings.ContainsAny(value, "\r\n")
 }

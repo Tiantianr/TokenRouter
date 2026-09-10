@@ -68,6 +68,8 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
+	// IsolationKey 隔离用户线程和账号身份快照，连接总预算仍由 Account.ID 统一管理。
+	IsolationKey string
 	// HeadersFactory 在实际拨号前生成认证头，避免缓存或预热复用 Agent Assertion。
 	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
 	ProxyURL        string
@@ -81,6 +83,7 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	executionScope      string
 	betaFeatures        string
 	codexInstallationID string
 	sessionIDHyphen     string
@@ -881,7 +884,7 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers, req.IsolationKey)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
@@ -1894,7 +1897,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders, req.TLSProfile, req.TLSProfileKey)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers, req.IsolationKey)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil
 }
@@ -2079,7 +2082,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers) &&
+		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers, a.IsolationKey) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers, b.IsolationKey) &&
 		openAIWSTLSProfileKey(a.TLSProfile, a.TLSProfileKey) == openAIWSTLSProfileKey(b.TLSProfile, b.TLSProfileKey)
 }
 
@@ -2109,9 +2112,12 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 	return strings.Join(normalized, ",")
 }
 
-func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
+func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header, scope ...string) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
 		betaFeatures: normalizeOpenAIWSBetaFeatures(headers),
+	}
+	if len(scope) > 0 {
+		key.executionScope = scope[0]
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {
@@ -2126,6 +2132,10 @@ func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Head
 	key.threadID = normalizeOpenAIWSStableIdentityHeader(headers, "thread-id")
 	key.clientRequestID = normalizeOpenAIWSStableIdentityHeader(headers, "x-client-request-id")
 	key.codexWindowID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-window-id")
+	if thread, _, ok := splitCodexWindowID(key.codexWindowID); ok {
+		// 压缩窗口逐轮变化，不应因此断开仍承载同一线程续链的连接。
+		key.codexWindowID = thread
+	}
 	return key
 }
 

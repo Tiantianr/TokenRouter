@@ -124,17 +124,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
-	sessionHash := s.GenerateSessionHash(c, nil)
-	if sessionHash == "" {
-		var legacySessionHash string
-		sessionHash, legacySessionHash = openAIWSSessionHashesFromID(promptCacheKey)
-		attachOpenAILegacySessionHashToGin(c, legacySessionHash)
-	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
-		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
-			turnState = savedTurnState
-		}
-	}
+	// 连接亲和按真实用户线程和凭据配置隔离；不从 session 缓存补入 turn-state。
+	sessionHash := codexWSStateScope(c, account)
 	preferredConnID := ""
 	if stateStore != nil && previousResponseID != "" {
 		if connID, ok := stateStore.GetResponseConn(previousResponseID); ok {
@@ -204,9 +195,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	tlsProfile, tlsProfileKey := s.resolveOpenAIWSTLSProfile(account, tlsRouterMatch)
 
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
+		Account:      account,
+		WSURL:        wsURL,
+		Headers:      wsHeaders,
+		IsolationKey: sessionHash,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -327,7 +319,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader))
+	responseHeaders := lease.HandshakeHeaders()
+	if lease.Reused() {
+		// 旧连接的建连响应不是当前 turn 新签发的状态。
+		responseHeaders.Del(openAIWSTurnStateHeader)
+	}
+	handshakeTurnState := extractOpenAICodexTurnState(responseHeaders)
 	logOpenAIWSModeDebug(
 		"handshake account_id=%d conn_id=%s has_turn_state=%v turn_state_len=%d",
 		account.ID,
@@ -335,13 +332,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		handshakeTurnState != "",
 		len(handshakeTurnState),
 	)
-	if handshakeTurnState != "" {
-		if stateStore != nil && sessionHash != "" {
-			stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
-		}
-		if c != nil {
-			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
-		}
+	if c != nil {
+		c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 	}
 
 	if err := s.performOpenAIWSGeneratePrewarm(
@@ -449,6 +441,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		frame = append(frame, '\n', '\n')
 		_, wErr := c.Writer.Write(frame)
 		if wErr == nil {
+			if !wroteDownstream {
+				s.noteStagedOpenAICodexTurnStateCommitted(c, account, responseHeaders)
+			}
 			wroteDownstream = true
 			pendingFlushEvents++
 			flushStreamWriter(forceFlush)
@@ -856,6 +851,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 
 		c.Data(http.StatusOK, "application/json", finalResponse)
+		s.noteStagedOpenAICodexTurnStateCommitted(c, account, responseHeaders)
 	} else {
 		flushStreamWriter(true)
 	}
@@ -906,7 +902,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		Stream:                      reqStream,
 		OpenAIWSMode:                true,
 		UpstreamTerminalEvent:       upstreamTerminalEvent,
-		ResponseHeaders:             lease.HandshakeHeaders(),
+		ResponseHeaders:             responseHeaders,
 		Duration:                    time.Since(startTime),
 		FirstTokenMs:                firstTokenMs,
 		UpstreamWarning:             upstreamWarning,

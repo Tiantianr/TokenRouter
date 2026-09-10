@@ -170,3 +170,15 @@ func TestCodexCanonicalIdentityFallsBackForInvalidResolverValue(t *testing.T) {
 	require.Equal(t, codexCLIUserAgent, CodexCanonicalUserAgent())
 	require.Equal(t, codexCLIVersion, CodexCanonicalClientVersion())
 }
+
+// 无效 canonical 的版本必须一起丢弃；override 的首尾控制字符也不能被修剪隐藏。
+func TestCodexIdentityRejectsRawCanonicalAndOverride(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return "codex-tui/9.999.9 (Linux)\r\n" })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+	require.Equal(t, codexCLIUserAgent, CodexCanonicalUserAgent())
+	require.Equal(t, codexCLIVersion, CodexCanonicalClientVersion())
+	h := http.Header{"Originator": {"codex-tui"}, "User-Agent": {"codex-tui/0.200.1 (Linux) terminal"}}
+	enforceCodexIdentityHeadersWithUA(h, "codex_cli_rs/9.999.9 (Windows)\n")
+	require.Equal(t, codexCLIUserAgent, h.Get("User-Agent"))
+	require.Equal(t, "codex-tui", h.Get("Originator"))
+}

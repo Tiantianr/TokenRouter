@@ -64,7 +64,7 @@ func (s *OpenAIGatewayService) BeginOpenAIWSIngressSessionPreemption(
 	preemptSessionHash := ""
 	preemptGroupID := getOpenAIGroupIDFromContext(c)
 	if account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
-		preemptSessionHash = s.GenerateSessionHash(c, firstClientMessage)
+		preemptSessionHash = codexExecutionScope(c, readCodexClientIdentity(codexRequestHeaders(c), firstClientMessage))
 	}
 	preemptCtx, cleanup, armed, preemptedPrevious := s.beginOpenAIWSSessionPreemptContext(
 		ctx,
@@ -161,6 +161,7 @@ func (s *OpenAIGatewayService) beginOpenAIWSSessionPreemptContext(
 			if stateStore := s.getOpenAIWSStateStore(); stateStore != nil {
 				stateStore.DeleteSessionTurnState(key.groupID, key.sessionHash)
 				stateStore.DeleteSessionConn(key.groupID, key.sessionHash)
+				stateStore.DeleteSessionConn(key.groupID, codexWSStateScopeForExecution(account, key.sessionHash))
 			}
 			cancel(errOpenAIWSSessionPreempted)
 		})

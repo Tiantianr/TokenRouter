@@ -2,7 +2,6 @@ package service
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,24 +12,23 @@ import (
 // 不透明值，客户端会在同一回合的后续请求中原样带回。
 const openAICodexTurnStateHeader = "x-codex-turn-state"
 
-// openAICodexTurnStateOrigin 记录最近向一个下游会话签发状态的账号。状态值与
-// 上游账号身份绑定；故障转移后继续把旧账号的状态带给新账号会形成矛盾信号。
+// openAICodexTurnStateOrigin 按具体状态值记录来源，不因同一 session 的并发响应
+// 覆盖另一条线程的记录。内存表只保存状态哈希与作用域，不保存原始状态。
 type openAICodexTurnStateOrigin struct {
 	accountID int64
+	owner     string
+	execution string
+	turn      string
 	expiresAt time.Time
 }
 
-// openAICodexTurnStateSeed 使用 API Key 与客户端原始会话标识作为追踪键。没有
-// 会话标识时不追踪，保持既有透传行为。
+// openAICodexTurnStateSeed 优先使用原始用户线程；标准客户端缺少线程时按认证 Key
+// 追踪。不能识别用户或线程时保持未知来源语义。
 func openAICodexTurnStateSeed(c *gin.Context) string {
-	if c == nil || c.Request == nil {
-		return ""
+	if execution := codexExecutionScope(c, stagedCodexClientIdentity(c)); execution != "" {
+		return execution
 	}
-	sessionID := extractClientSessionID(c.Request.Header)
-	if sessionID == "" {
-		return ""
-	}
-	return strconv.FormatInt(getAPIKeyIDFromContext(c), 10) + "\x00" + sessionID
+	return codexUserExecutionScope(c)
 }
 
 // relayOpenAICodexTurnState 将上游状态显式写回客户端，并只在响应真正会送达
@@ -46,7 +44,7 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		return
 	}
 	c.Writer.Header().Set(canonical, state)
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, state)
 }
 
 // stageOpenAICodexTurnState 暂存首输出守卫中的状态头。守卫阶段尚可能故障转移，
@@ -75,7 +73,7 @@ func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Co
 	if staged == nil || strings.TrimSpace(staged.Get(openAICodexTurnStateHeader)) == "" {
 		return
 	}
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, extractOpenAICodexTurnState(staged))
 }
 
 func extractOpenAICodexTurnState(upstream http.Header) string {
@@ -85,24 +83,28 @@ func extractOpenAICodexTurnState(upstream http.Header) string {
 	return strings.TrimSpace(upstream.Get(openAICodexTurnStateHeader))
 }
 
-// noteOpenAICodexTurnStateProvenance 记录下游会话与最近签发账号的对应关系。
-func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account) {
+// noteOpenAICodexTurnStateProvenance 记录这一不透明状态的实际签发作用域。
+func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account, state string) {
 	if s == nil || account == nil || account.ID <= 0 {
 		return
 	}
 	seed := openAICodexTurnStateSeed(c)
-	if seed == "" {
+	if seed == "" || strings.TrimSpace(state) == "" {
 		return
 	}
-	s.openaiCodexTurnStateOrigins.Store(seed, openAICodexTurnStateOrigin{
+	s.openaiCodexTurnStateOrigins.Store(openAICodexTurnStateValueKey(state), openAICodexTurnStateOrigin{
 		accountID: account.ID,
+		owner:     codexStateOwner(codexAccountIdentitySource(c, account)),
+		execution: seed,
+		turn:      codexClientTurnKey(c),
 		expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL()),
 	})
 	s.sweepOpenAICodexTurnStateOrigins()
 }
 
-// guardOpenAICodexTurnStateEcho 移除已知由其它账号签发的客户端回带值。同账号
-// 与未知来源保持不变；服务端绝不自行注入状态，避免改变真实 Codex 回合语义。
+// guardOpenAICodexTurnStateEcho 拒绝已知的跨用户、线程、账号、配置或 turn 回带。
+// 未知来源的客户端值仍透传；缓存不自动注入任何跨请求状态。
+// @project-doc docs/interfaces/openai_upstream.md#codex_ws_turn_state
 func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, account *Account, h http.Header) {
 	if s == nil || h == nil || account == nil {
 		return
@@ -110,24 +112,22 @@ func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, acc
 	if strings.TrimSpace(h.Get(openAICodexTurnStateHeader)) == "" {
 		return
 	}
-	seed := openAICodexTurnStateSeed(c)
-	if seed == "" {
-		return
-	}
-	raw, ok := s.openaiCodexTurnStateOrigins.Load(seed)
+	key := openAICodexTurnStateValueKey(h.Get(openAICodexTurnStateHeader))
+	raw, ok := s.openaiCodexTurnStateOrigins.Load(key)
 	if !ok {
 		return
 	}
 	origin, ok := raw.(openAICodexTurnStateOrigin)
 	if !ok {
-		s.openaiCodexTurnStateOrigins.Delete(seed)
+		s.openaiCodexTurnStateOrigins.Delete(key)
 		return
 	}
 	if !origin.expiresAt.IsZero() && time.Now().After(origin.expiresAt) {
-		s.openaiCodexTurnStateOrigins.Delete(seed)
+		s.openaiCodexTurnStateOrigins.Delete(key)
 		return
 	}
-	if origin.accountID != account.ID {
+	turn := codexClientTurnKey(c)
+	if origin.owner != codexStateOwner(codexAccountIdentitySource(c, account)) || origin.execution != openAICodexTurnStateSeed(c) || (origin.turn != "" && turn != "" && origin.turn != turn) {
 		h.Del(openAICodexTurnStateHeader)
 	}
 }

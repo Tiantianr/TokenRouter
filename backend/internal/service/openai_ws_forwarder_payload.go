@@ -105,14 +105,17 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 			}
 		}
 		// 仅转发 Codex 明确使用的窗口与安装身份提示，不开放任意客户端头透传。
+		clientIdentityHeaders := codexRequestHeaders(c)
 		for _, name := range [...]string{
+			"x-codex-parent-thread-id",
+			"x-openai-subagent",
 			"x-codex-window-id",
 			"x-codex-installation-id",
 			"session-id",
 			"thread-id",
 			"x-client-request-id",
 		} {
-			if value := strings.TrimSpace(c.Request.Header.Get(name)); value != "" {
+			if value := strings.TrimSpace(clientIdentityHeaders.Get(name)); value != "" {
 				headers.Set(name, value)
 			}
 		}
@@ -190,6 +193,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		"soft_routing_hint",
 	)
 
+	s.guardOpenAICodexTurnStateEcho(c, account, headers)
 	return headers, sessionResolution, nil
 }
 
@@ -225,9 +229,15 @@ func setOpenAIWSTurnMetadata(payload map[string]any, turnMetadata string) {
 
 	switch existing := payload["client_metadata"].(type) {
 	case map[string]any:
+		if _, exists := existing[openAIWSTurnMetadataHeader]; exists {
+			return
+		}
 		existing[openAIWSTurnMetadataHeader] = metadata
 		payload["client_metadata"] = existing
 	case map[string]string:
+		if _, exists := existing[openAIWSTurnMetadataHeader]; exists {
+			return
+		}
 		next := make(map[string]any, len(existing)+1)
 		for k, v := range existing {
 			next[k] = v
