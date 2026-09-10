@@ -61,6 +61,20 @@ func applyStagedCodexFingerprintClientMetadata(c *gin.Context, account *Account,
 	return applyCodexFingerprintClientMetadata(reqBody, stagedCodexFingerprintIDs(c, account))
 }
 
+// prepareCodexWSFingerprintTurn 每个 response.create 只解析一次身份，重试复用同一结果。
+// 凭据来源在 WS 建连时固定；后续保存配置只影响新连接，避免续聊中途混用身份。
+func prepareCodexWSFingerprintTurn(c *gin.Context, account *Account, body []byte) ([]byte, error) {
+	var headers http.Header
+	if c != nil && c.Request != nil {
+		headers = c.Request.Header
+	}
+	ids := resolveCodexFingerprintIDsFromRequest(codexAccountIdentitySource(c, account), headers)
+	// 包括 off 模式在内均覆盖上下文，防止故障转移残留上一账号身份。
+	stageCodexFingerprintIDs(c, ids)
+	next, _, err := applyCodexFingerprintClientMetadataRaw(body, ids)
+	return next, err
+}
+
 // codexFingerprintMode 控制 OAuth 账号出站请求的设备指纹收敛强度。
 // 多人共享同一 OAuth 账号时，每个用户的 Codex 客户端会携带各自不同的
 // installation_id / session_id / thread_id，上游据此判定设备数和会话数。

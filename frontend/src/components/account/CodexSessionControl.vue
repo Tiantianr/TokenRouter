@@ -16,6 +16,8 @@
     <div v-if="config?.effective_session_id" class="break-all font-mono text-xs text-gray-500">
       {{ t('admin.accounts.openai.sessionOverrideCurrent') }}: {{ config.effective_session_id }}
     </div>
+    <p class="text-xs text-gray-500">{{ t('admin.accounts.openai.sessionOverrideTestHint') }}</p>
+    <p class="text-xs text-gray-500">{{ t('admin.accounts.openai.sessionOverrideReconnectHint') }}</p>
     <div class="flex items-center justify-end gap-2">
       <button v-if="error" type="button" class="text-sm text-red-600" :disabled="locked" @click="load">{{ t('common.retry') }}</button>
       <button type="button" class="btn btn-primary flex items-center gap-1.5" :disabled="locked || !config?.supported || !dirty || (enabled && !sessionID)" data-testid="codex-session-save" @click="save">
@@ -27,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import { adminAPI } from '@/api/admin'
@@ -35,7 +37,7 @@ import type { CodexSessionConfiguration, CodexSessionOverride } from '@/api/admi
 import type { Account } from '@/types'
 
 const props = defineProps<{ account: Account; busy: boolean }>()
-const emit = defineEmits<{ (e: 'draft', value: CodexSessionOverride | null): void; (e: 'saved'): void }>()
+const emit = defineEmits<{ (e: 'draft', value: CodexSessionOverride | null): void; (e: 'saved'): void; (e: 'pending', value: boolean): void }>()
 const { t } = useI18n()
 const config = ref<CodexSessionConfiguration | null>(null)
 const enabled = ref(false)
@@ -65,6 +67,10 @@ async function load() {
   const current = ++generation
   config.value = null
   error.value = ''
+  enabled.value = false
+  sessionID.value = ''
+  saving.value = false
+  loading.value = false
   emit('draft', null)
   if (!eligible.value) return
   loading.value = true
@@ -100,5 +106,12 @@ async function save() {
   }
 }
 
+// 配置请求期间禁止发起测试，避免保存与测试交错使用旧草稿。
+watch([loading, saving], ([isLoading, isSaving]) => emit('pending', isLoading || isSaving), { immediate: true, flush: 'sync' })
 watch(() => [props.account.id, eligible.value], load, { immediate: true })
+onBeforeUnmount(() => {
+  // 关闭弹框后忽略迟到的响应，重新打开时从数据库加载。
+  generation++
+  emit('pending', false)
+})
 </script>

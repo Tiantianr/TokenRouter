@@ -101,7 +101,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			if c != nil && c.Request != nil {
 				clientHeaders = c.Request.Header
 			}
-			fingerprintIDs := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+			// 与普通转发和 WS 共用已经解析的母账号，避免影子账号身份分裂。
+			fingerprintIDs := resolveCodexFingerprintIDsFromRequest(codexAccountIdentitySource(c, account), clientHeaders)
 			if fingerprintIDs != nil {
 				updatedBody, changed, fingerprintErr := applyCodexFingerprintClientMetadataRaw(body, fingerprintIDs)
 				if fingerprintErr != nil {

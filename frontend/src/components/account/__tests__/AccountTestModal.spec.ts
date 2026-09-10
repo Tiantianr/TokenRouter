@@ -2,15 +2,19 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import AccountTestModal from '../AccountTestModal.vue'
+import AdminAccountTestModal from '@/components/admin/account/AccountTestModal.vue'
+import CodexSessionControl from '../CodexSessionControl.vue'
 
-const { getAvailableModelsMock } = vi.hoisted(() => ({
-  getAvailableModelsMock: vi.fn()
+const { getAvailableModelsMock, getCodexSessionMock } = vi.hoisted(() => ({
+  getAvailableModelsMock: vi.fn(),
+  getCodexSessionMock: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      getAvailableModels: getAvailableModelsMock
+      getAvailableModels: getAvailableModelsMock,
+      getCodexSession: getCodexSessionMock
     }
   }
 }))
@@ -99,6 +103,7 @@ describe('AccountTestModal', () => {
 
   beforeEach(() => {
     getAvailableModelsMock.mockReset()
+    getCodexSessionMock.mockReset().mockResolvedValue({ enabled: false, session_id: '', supported: true, effective_session_id: 'original' })
     getAvailableModelsMock.mockResolvedValue([
       { id: 'gpt-5.4', display_name: 'GPT-5.4' }
     ])
@@ -116,6 +121,32 @@ describe('AccountTestModal', () => {
   afterEach(() => {
     global.fetch = originalFetch
     localStorage.clear()
+  })
+
+  it.each([AccountTestModal, AdminAccountTestModal])('弹框重开重新加载配置，配置处理中不发起测试', async (component) => {
+    const wrapper = mount(component, {
+      props: { show: false, account: { ...buildAccount(), extra: { codex_fingerprint_mode: 'session' } } },
+      global: { stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true } }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(getCodexSessionMock).toHaveBeenCalledTimes(1)
+    const control = wrapper.getComponent(CodexSessionControl)
+    control.vm.$emit('pending', true)
+    await wrapper.vm.$nextTick()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    await (wrapper.vm as any).startTest()
+    expect(global.fetch).not.toHaveBeenCalled()
+    control.vm.$emit('pending', false)
+    control.vm.$emit('draft', { enabled: true, session_id: 'candidate' })
+    await (wrapper.vm as any).startTest()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body).codex_session_override.session_id).toBe('candidate')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(getCodexSessionMock).toHaveBeenCalledTimes(2)
+    expect((wrapper.vm as any).sessionDraft).toBeNull()
+    wrapper.unmount()
   })
 
   it('posts compact mode for OpenAI compact probe', async () => {

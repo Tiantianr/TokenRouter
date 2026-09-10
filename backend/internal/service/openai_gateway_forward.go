@@ -544,6 +544,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				clientHeaders = c.Request.Header
 			}
 			fingerprintIDs = resolveCodexFingerprintIDsFromRequest(fingerprintAccount, clientHeaders)
+			// HTTP 转上游 WS 时也必须让握手头与本轮请求体使用同一份身份。
+			stageCodexFingerprintIDs(c, fingerprintIDs)
 			if applyCodexFingerprintClientMetadata(decoded, fingerprintIDs) {
 				markDecodedModified()
 			}

@@ -90,7 +90,7 @@
         />
       </div>
 
-      <CodexSessionControl v-if="account && testType === 'text' && testMode === 'default'" :account="account" :busy="status === 'connecting'" @draft="sessionDraft = $event" @saved="emit('updated')" />
+      <CodexSessionControl v-if="show && account && testType === 'text' && testMode === 'default'" :account="account" :busy="status === 'connecting'" @draft="sessionDraft = $event" @pending="sessionConfigPending = $event" @saved="emit('updated')" />
 
       <!-- Terminal Output -->
       <div class="group relative">
@@ -216,7 +216,7 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="status === 'connecting' || sessionConfigPending || !selectedModelId"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
             status === 'connecting' || !selectedModelId
@@ -290,6 +290,7 @@ const emit = defineEmits<{
   (e: 'updated'): void
 }>()
 const sessionDraft = ref<CodexSessionOverride | null>(null)
+const sessionConfigPending = ref(false)
 
 const terminalRef = ref<HTMLElement | null>(null)
 const status = ref<'idle' | 'connecting' | 'success' | 'error'>('idle')
@@ -458,7 +459,7 @@ const scrollToBottom = async () => {
 }
 
 const startTest = async () => {
-  if (!props.account || !selectedModelId.value) return
+  if (!props.account || !selectedModelId.value || sessionConfigPending.value) return
 
   resetState()
   status.value = 'connecting'
@@ -558,10 +559,15 @@ const handleEvent = (event: {
   error?: string
   image_url?: string
   mime_type?: string
+  session_id?: string
+  thread_id?: string
 }) => {
   switch (event.type) {
     case 'test_start':
       addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      if (event.session_id && event.thread_id) {
+        addLine(t('admin.accounts.openai.sessionOverrideTestIdentity', { session: event.session_id, thread: event.thread_id }), 'text-cyan-400')
+      }
       if (event.model) {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }

@@ -108,6 +108,9 @@ type TestEvent struct {
 	Data     any    `json:"data,omitempty"`
 	Success  bool   `json:"success,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// 仅管理员测试返回实际出站身份，便于核对草稿与保存后的请求。
+	SessionID string `json:"session_id,omitempty"`
+	ThreadID  string `json:"thread_id,omitempty"`
 }
 
 const (
@@ -967,7 +970,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	var apiURL string
 	var isOAuth bool
 
-	if credentialAccount.IsOAuth() {
+	if credentialAccount.IsOpenAIOAuthLike() {
 		isOAuth = true
 		// Agent Identity 对每次请求单独签名，不保存 OAuth token。
 		if !credentialAccount.IsOpenAIAgentIdentity() {
@@ -1019,18 +1022,26 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth)
-	// 仅显式使用指定会话或测试草稿时对齐正式收敛，保持其它账号原有测试行为。
+	// 测试复用正式收敛规则，以固定的独立客户端会话模拟真实线程。
+	// 更换候选 ID 不再同时更换 thread；保存前后也复用同一测试线程。
 	var sessionTestIDs *codexFingerprintIDs
-	_, hasSessionDraft := c.Get(CodexSessionTestOverrideKey)
-	if isOAuth && (hasSessionDraft || configuredCodexSessionID(credentialAccount) != "") {
-		sessionTestIDs = resolveCodexFingerprintIDsFromRequest(credentialAccount, c.Request.Header)
+	if isOAuth {
+		testHeaders := c.Request.Header.Clone()
+		if extractClientSessionID(testHeaders) == "" {
+			testHeaders.Set("session-id", deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-account-test-client:v1:%d", credentialAccount.ID)))
+		}
+		sessionTestIDs = resolveCodexFingerprintIDsFromRequest(credentialAccount, testHeaders)
 		applyCodexFingerprintClientMetadata(payload, sessionTestIDs)
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	// task 失效时会注册新 task 并重试探针，因此开始事件只发送一次。
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
-		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+		event := TestEvent{Type: "test_start", Model: testModelID}
+		if sessionTestIDs != nil {
+			event.SessionID, event.ThreadID = sessionTestIDs.sessionID, sessionTestIDs.threadID
+		}
+		s.sendEvent(c, event)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
@@ -1059,7 +1070,6 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if isOAuth {
 		req.Host = "chatgpt.com"
 		req.Header.Set("accept", "text/event-stream")
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
 		req.Header.Set("Originator", resolveCodexOutboundIdentity("").originator)
 		if customUA := strings.TrimSpace(credentialAccount.GetOpenAIUserAgent()); customUA != "" {
 			req.Header.Set("User-Agent", customUA)
@@ -1077,6 +1087,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 	applyCodexFingerprintHeaders(req.Header, sessionTestIDs)
+	// 与正式 HTTP Responses 使用相同的能力协商和最终模型路由提示。
+	applyOpenAICodexBetaFeatures(c, credentialAccount, req.Header)
+	setOpenAICodexRoutingHint(req.Header, credentialAccount, upstreamTestModelID, "")
 
 	// Get proxy URL
 	proxyURL := ""

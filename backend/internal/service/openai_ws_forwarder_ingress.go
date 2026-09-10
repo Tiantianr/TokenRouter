@@ -349,6 +349,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if accountScoped {
 			normalized = accountScopedPayload
 		}
+		if !forceHTTPBridge {
+			// 原生 WS 不经过 HTTP Forward，须在此逐轮生成并暂存收敛身份。
+			next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, normalized)
+			if fingerprintErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", fingerprintErr)
+			}
+			normalized = next
+		}
 		if isOpenAIResponsesLiteWebSocketPayload(normalized) {
 			litePayload, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(account, normalized)
 			if liteErr != nil {
@@ -1879,9 +1887,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return parseErr
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
-		if nextPayload.promptCacheKey != "" {
+		if nextPayload.promptCacheKey != "" || stagedCodexFingerprintIDs(c, account) != nil {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
-			// prompt_cache_key 对握手头的更新仅在未来需要重新建连时生效。
+			// 每轮更新未来重连所用握手头，即使没有 prompt_cache_key 也要同步本轮身份。
 			updatedHeaders, _, updHdrErr := s.buildOpenAIWSHeaders(
 				ctx,
 				c,

@@ -23,6 +23,10 @@ OpenAI OAuth 账号的 `extra.codex_fingerprint_mode` 控制 Codex Responses 的
 
 在 `session` 或 `full` 模式下，管理员还可以在账号测试弹框中开启“指定会话 ID”。该开关默认关闭，不影响已有账号；只有显式保存的 UUID 才替代账号 seed 派生的上游 `session_id`。弹框中的随机 ID 是测试草稿，点击保存前只用于当前测试请求，不写入账号，也不改变正式转发。关闭开关会回到原有 seed 派生 ID，并保留 seed；账号本地会话标识和客户端会话列表不会被改写。该配置只允许凭据母账号使用，影子账号继续继承母账号。
 
+指定 ID 与原有 seed 派生身份共用 HTTP、HTTP 转上游 WebSocket、原生 WebSocket 和 WS passthrough 的收敛实现。每轮 `response.create` 单独生成 turn ID，请求体、内嵌 metadata 与该轮新建连接的握手头共享结果；内部重试复用该轮身份。已建立的 WS 握手不会逐轮重发，后续帧只更新本轮 metadata。账号保存通过调度 outbox 和单账号快照同步影响新请求；已有 WS 会话保持建连时账号配置，管理员需等当前回复结束后重连，不能通过中途改身份打断历史续接。
+
+普通文字账号测试使用 HTTP Responses，并应用账号现有收敛配置；未携带客户端会话头时使用按账号稳定派生的独立测试会话。`session` 模式下更换候选 ID 只改变 session，不会同时更换测试 thread，保存前后复测也保持该 thread；`full` 模式仍按配置令 thread 等于 session。SSE 开始事件返回实际出站的 `session_id` 和 `thread_id`，界面显示用于核对。测试不包含真实历史、工具回合或多人并发，因此不能把单次成功当作持续可用或回答质量保证。
+
 OpenAI 兼容请求的显式粘性会话头按 `session-id`、`session_id`、`conversation_id`、OpenCode 会话头和 CodeBuddy 会话头依次读取；其中 `session-id` 是 Codex 客户端使用的连字符形式，优先于旧下划线形式。WebSocket 会话日志采用相同优先级，缺少显式会话头时才回退到 `prompt_cache_key`，避免重连时因头名差异漂移到其它账号。
 
 <a id="openai_protocol_dispatch"></a>

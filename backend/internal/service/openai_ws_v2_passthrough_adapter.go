@@ -882,6 +882,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if accountScoped {
 		firstClientMessage = accountScopedFirst
 	}
+	// 透传首帧与握手必须共用身份，后续帧只更新逐轮字段。
+	firstClientMessage, scopeErr = prepareCodexWSFingerprintTurn(c, account, firstClientMessage)
+	if scopeErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", scopeErr)
+	}
 	firstPolicyCtx := openAIWSFastModePolicyContext(ctx, hooks, 1)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(firstPolicyCtx, account, firstUpstreamModel, firstClientMessage)
 	if policyErr != nil {
@@ -1199,6 +1204,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			originalResponseCreate := payload
 			if isResponseCreate {
+				next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, payload)
+				if fingerprintErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", fingerprintErr)
+				}
+				payload = next
 				requestModelForPolicy := usageMeta.requestModelForFrame(payload)
 				if next, policyErr := applyOpenAIWSReasoningEffortPolicy(payload, hooks, requestModelForPolicy); policyErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, policyErr.Error(), policyErr)

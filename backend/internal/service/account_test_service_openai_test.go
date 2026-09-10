@@ -134,7 +134,8 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Len(t, upstream.requests, 1)
 	req := upstream.requests[0]
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
-	require.Equal(t, "responses=experimental", req.Header.Get("OpenAI-Beta"))
+	require.Empty(t, req.Header.Get("OpenAI-Beta"))
+	require.Equal(t, "remote_compaction_v2", req.Header.Get("x-codex-beta-features"))
 	require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("Originator"))
 	require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
 	require.NotEmpty(t, repo.updatedExtra)
