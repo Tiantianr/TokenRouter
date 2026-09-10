@@ -45,7 +45,7 @@ func newCodexSessionWireGateway(t *testing.T) (*OpenAIGatewayService, <-chan cod
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		for turn := 1; ; turn++ {
 			_, body, err := conn.Read(r.Context())
 			if err != nil {
@@ -188,7 +188,7 @@ func TestCodexSessionFlowNativeWebSocket(t *testing.T) {
 					serverErrors <- err
 					return
 				}
-				defer conn.CloseNow()
+				defer func() { _ = conn.CloseNow() }()
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())
 				c.Request = r
 				_, first, err := conn.Read(r.Context())
