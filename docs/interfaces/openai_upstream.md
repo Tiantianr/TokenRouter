@@ -21,6 +21,8 @@ OAuth 账号可受 Codex CLI-only、允许客户端、agent identity、privacy s
 
 OpenAI OAuth 账号的 `extra.codex_fingerprint_mode` 控制 Codex Responses 的设备指纹收敛，未配置、空值或无效值都默认 `off`，只有 `device`、`session`、`full` 是显式 opt-in：`device` 只统一 installation ID，`session` 进一步统一 session ID 并按客户端原始 session 稳定派生 thread ID，`full` 再把所有客户端收敛到同一 thread。session/full 的 turn ID 每个请求重新生成，但同一次请求的 HTTP 头、`client_metadata` 和内嵌 turn metadata 必须共用同一组 ID；HTTP 内部重试也不得重新派生。普通转换与 OAuth passthrough 都遵守该配置，透传大 body 只局部改写 `client_metadata`，不做整包解码；旧版 `/responses/compact` 保持既有协议且不应用额外收敛。管理员配置的真实 OpenAI device ID 优先于账号 ID 派生值。Spark 影子账号继承父账号模式、device ID 和稳定种子，不允许以影子 ID 分裂同一 OAuth 凭据的上游设备身份。
 
+在 `session` 或 `full` 模式下，管理员还可以在账号测试弹框中开启“指定会话 ID”。该开关默认关闭，不影响已有账号；只有显式保存的 UUID 才替代账号 seed 派生的上游 `session_id`。弹框中的随机 ID 是测试草稿，点击保存前只用于当前测试请求，不写入账号，也不改变正式转发。关闭开关会回到原有 seed 派生 ID，并保留 seed；账号本地会话标识和客户端会话列表不会被改写。该配置只允许凭据母账号使用，影子账号继续继承母账号。
+
 OpenAI 兼容请求的显式粘性会话头按 `session-id`、`session_id`、`conversation_id`、OpenCode 会话头和 CodeBuddy 会话头依次读取；其中 `session-id` 是 Codex 客户端使用的连字符形式，优先于旧下划线形式。WebSocket 会话日志采用相同优先级，缺少显式会话头时才回退到 `prompt_cache_key`，避免重连时因头名差异漂移到其它账号。
 
 <a id="openai_protocol_dispatch"></a>

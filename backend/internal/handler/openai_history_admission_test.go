@@ -90,6 +90,8 @@ type historyHTTPUpstream struct {
 	mu       sync.Mutex
 	accounts []int64
 	stream   bool
+	// 非零时模拟已选中宽松账号的真实上游故障。
+	failStatus int
 }
 
 func (u *historyHTTPUpstream) DoWithTLS(req *http.Request, proxy string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
@@ -101,6 +103,9 @@ func (u *historyHTTPUpstream) Do(_ *http.Request, _ string, accountID int64, _ i
 	u.accounts = append(u.accounts, accountID)
 	count := len(u.accounts)
 	u.mu.Unlock()
+	if u.failStatus != 0 {
+		return &http.Response{StatusCode: u.failStatus, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"upstream capacity exhausted"}}`))}, nil
+	}
 	id := fmt.Sprintf("resp_history_%d", count)
 	body := fmt.Sprintf(`{"id":%q,"object":"response","status":"completed","model":"gpt-5.1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`, id)
 	contentType := "application/json"
@@ -160,6 +165,98 @@ func TestOpenAIHistoryHTTPRouting(t *testing.T) {
 			require.Equal(t, tc.ids, u.calls())
 		})
 	}
+}
+
+// 宽松账号上游失败后，不得转发到严格账号，也不得用历史拒绝掩盖上游错误。
+func TestOpenAIHistoryExhaustedPreservesUpstreamError(t *testing.T) {
+	for _, status := range []int{429, 502} {
+		for _, stream := range []bool{false, true} {
+			for _, protocol := range []string{"responses", "chat", "messages"} {
+				t.Run(fmt.Sprintf("%s/status_%d/stream_%t", protocol, status, stream), func(t *testing.T) {
+					u := &historyHTTPUpstream{failStatus: status}
+					h, _ := newHistoryHTTPHandler(t, true, service.AccountTypeOAuth, u)
+					body := fmt.Sprintf(`{"model":"gpt-5.1","stream":%t,"input":[{"role":"assistant","content":"old"},{"role":"user","content":"next"}]}`, stream)
+					path := "/v1/responses"
+					handle := (*OpenAIGatewayHandler).Responses
+					if protocol != "responses" {
+						body = fmt.Sprintf(`{"model":"gpt-5.1","stream":%t,"max_tokens":64,"messages":[{"role":"assistant","content":"old"},{"role":"user","content":"next"}]}`, stream)
+						path, handle = "/v1/chat/completions", (*OpenAIGatewayHandler).ChatCompletions
+						if protocol == "messages" {
+							path, handle = "/v1/messages", (*OpenAIGatewayHandler).Messages
+						}
+					}
+					c, w := historyHTTPContext(t, body)
+					c.Request.URL.Path = path
+					handle(h, c)
+					require.Equal(t, status, w.Code, w.Body.String())
+					require.NotContains(t, w.Body.String(), "external_history_not_allowed")
+					require.NotContains(t, w.Body.String(), service.ErrOpenAIExternalHistory.Error())
+					require.Equal(t, []int64{2}, u.calls())
+					_, marked := c.Get(opsOpenAIHistoryErrorKey)
+					require.False(t, marked, "不能将上游失败标记为本地历史策略拒绝")
+					upstreamStatus, ok := getContextInt64(c, service.OpsUpstreamStatusCodeKey)
+					require.True(t, ok)
+					require.EqualValues(t, status, upstreamStatus)
+				})
+			}
+		}
+	}
+}
+
+func TestOpenAIHistoryFailoverErrorPrecedence(t *testing.T) {
+	upstream := &service.UpstreamFailoverError{StatusCode: 429}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		upstream *service.UpstreamFailoverError
+		preserve bool
+	}{
+		{"initial_history_rejection", service.ErrOpenAIExternalHistory, nil, false},
+		{"exhausted_after_upstream", fmt.Errorf("selection: %w", service.ErrOpenAIExternalHistory), upstream, true},
+		{"storage_failure", service.ErrOpenAIHistoryUnavailable, upstream, false},
+		{"conflict", service.ErrOpenAIHistoryConflict, upstream, false},
+		{"joined_storage_failure", errors.Join(service.ErrOpenAIExternalHistory, service.ErrOpenAIHistoryUnavailable), upstream, false},
+		{"unrelated", service.ErrNoAvailableAccounts, upstream, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.preserve, preserveOpenAIUpstreamErrorAfterHistoryExhausted(tc.err, tc.upstream))
+		})
+	}
+}
+
+// 实际 WS 握手及 HTTP bridge 转发验证：历史候选耗尽应以原始限流关闭，而非历史 400。
+func TestOpenAIHistoryWSExhaustedPreservesUpstreamError(t *testing.T) {
+	u := &historyHTTPUpstream{failStatus: http.StatusTooManyRequests}
+	h, r := newHistoryHTTPHandler(t, true, service.AccountTypeOAuth, u)
+	h.cfg.Gateway.OpenAIWS.Enabled = true
+	h.cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	h.cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	h.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	h.cfg.Gateway.OpenAIWS.HTTPBridgeEnabled = true
+	accounts := r.AccountRepository.(openAIResponsesFailoverAccountRepo)
+	for i := range accounts.accounts {
+		accounts.accounts[i].Extra["openai_oauth_responses_websockets_v2_mode"] = service.OpenAIWSIngressModeHTTPBridge
+		accounts.accounts[i].Extra["openai_oauth_responses_websockets_v2_enabled"] = true
+	}
+	r.AccountRepository = accounts
+	server := newOpenAIWSHandlerTestServer(t, h, middleware.AuthSubject{UserID: 100})
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/openai/v1/responses", nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.CloseNow() }()
+	require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":[{"role":"assistant","content":"old"},{"role":"user","content":"next"}]}`)))
+	for {
+		_, frame, readErr := conn.Read(ctx)
+		if readErr != nil {
+			require.Equal(t, coderws.StatusTryAgainLater, coderws.CloseStatus(readErr), readErr.Error())
+			require.Contains(t, readErr.Error(), "rate limit")
+			break
+		}
+		require.NotContains(t, string(frame), "external_history_not_allowed")
+	}
+	require.Equal(t, []int64{2}, u.calls())
 }
 
 func TestOpenAIHistoryGroupIsolationComposition(t *testing.T) {

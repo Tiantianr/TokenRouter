@@ -449,7 +449,7 @@
     />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
-    <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
+    <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @updated="reload" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <AdvancedSchedulerScoreModal :show="showAdvancedSchedulerScore" :account="advancedSchedulerScoreAcc" @close="closeAdvancedSchedulerScoreModal" />
     <CodexInviteResetModal :show="showInviteReset" :account="inviteResetAcc" @close="closeInviteResetModal" @updated="enterAutoRefreshSilentWindow" />

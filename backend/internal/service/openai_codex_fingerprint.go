@@ -111,6 +111,8 @@ func stripCodexFingerprintSeed(extra map[string]any) map[string]any {
 	}
 	stripped := maps.Clone(extra)
 	delete(stripped, codexFingerprintSeedExtraKey)
+	delete(stripped, codexSessionOverrideEnabledKey)
+	delete(stripped, codexSessionOverrideIDKey)
 	return stripped
 }
 
@@ -160,6 +162,15 @@ func prepareCodexFingerprintExtraForUpdate(account *Account, extra map[string]an
 	if account == nil || !account.IsOpenAIOAuthLike() {
 		return prepared
 	}
+	// 指定会话只能经专用接口修改，旧编辑器或整对象保存不得清空或覆盖。
+	for _, key := range []string{codexSessionOverrideEnabledKey, codexSessionOverrideIDKey} {
+		if value, ok := account.Extra[key]; ok {
+			if prepared == nil {
+				prepared = make(map[string]any)
+			}
+			prepared[key] = value
+		}
+	}
 	if seed, ok := codexFingerprintSeed(account.Extra); ok {
 		if prepared == nil {
 			prepared = make(map[string]any, 1)
@@ -182,6 +193,8 @@ func sanitizedCodexFingerprintExtraUpdates(updates map[string]any) map[string]an
 	}
 	sanitized := maps.Clone(updates)
 	delete(sanitized, codexFingerprintSeedExtraKey)
+	delete(sanitized, codexSessionOverrideEnabledKey)
+	delete(sanitized, codexSessionOverrideIDKey)
 	return sanitized
 }
 
@@ -308,6 +321,9 @@ func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode c
 
 	case codexFingerprintSession:
 		ids.sessionID = resolveConvergedSessionID(seed)
+		if override := configuredCodexSessionID(account); override != "" {
+			ids.sessionID = override
+		}
 		ids.threadID = resolveConvergedThreadID(seed, clientSessionID)
 		if ids.threadID == "" {
 			ids.threadID = ids.sessionID
@@ -318,6 +334,9 @@ func resolveCodexFingerprintIDs(account *Account, clientSessionID string, mode c
 
 	case codexFingerprintFull:
 		ids.sessionID = resolveConvergedSessionID(seed)
+		if override := configuredCodexSessionID(account); override != "" {
+			ids.sessionID = override
+		}
 		ids.threadID = ids.sessionID
 		ids.turnID = uuid.Must(uuid.NewV7()).String()
 		ids.windowID = ids.threadID + ":0"

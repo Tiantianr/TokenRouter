@@ -409,6 +409,16 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	if raw, exists := c.Get(CodexSessionTestOverrideKey); exists {
+		draft, ok := raw.(CodexSessionOverride)
+		if !ok || mode != AccountTestModeDefault || testType == AccountTestTypeImage {
+			return s.sendErrorAndEnd(c, "Session ID drafts require a normal text test")
+		}
+		account, err = accountWithCodexSessionDraft(account, draft)
+		if err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
+	}
 	// 图片测试仅允许支持图像接口的平台，Antigravity 仅开放 API Key 账号。
 	if explicitTestType && testType == AccountTestTypeImage &&
 		!account.IsOpenAI() && !account.IsGemini() &&
@@ -1009,6 +1019,13 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth)
+	// 仅显式使用指定会话或测试草稿时对齐正式收敛，保持其它账号原有测试行为。
+	var sessionTestIDs *codexFingerprintIDs
+	_, hasSessionDraft := c.Get(CodexSessionTestOverrideKey)
+	if isOAuth && (hasSessionDraft || configuredCodexSessionID(credentialAccount) != "") {
+		sessionTestIDs = resolveCodexFingerprintIDsFromRequest(credentialAccount, c.Request.Header)
+		applyCodexFingerprintClientMetadata(payload, sessionTestIDs)
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	// task 失效时会注册新 task 并重试探针，因此开始事件只发送一次。
@@ -1059,6 +1076,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
+	applyCodexFingerprintHeaders(req.Header, sessionTestIDs)
 
 	// Get proxy URL
 	proxyURL := ""

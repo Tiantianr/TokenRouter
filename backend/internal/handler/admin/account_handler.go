@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -1117,9 +1118,11 @@ func (h *AccountHandler) Delete(c *gin.Context) {
 
 // TestAccountRequest represents the request body for testing an account
 type TestAccountRequest struct {
-	ModelID string `json:"model_id"`
-	Prompt  string `json:"prompt"`
-	Mode    string `json:"mode"`
+	// 测试草稿不落库，正式转发只读取专用配置接口保存的值。
+	CodexSessionOverride *service.CodexSessionOverride `json:"codex_session_override"`
+	ModelID              string                        `json:"model_id"`
+	Prompt               string                        `json:"prompt"`
+	Mode                 string                        `json:"mode"`
 	// TestType 由管理端明确指定测试文字或图片，避免服务端猜测模型能力。
 	TestType string `json:"test_type"`
 	// TestMode 兼容早期客户端使用的字段名，优先级低于 test_type。
@@ -1151,7 +1154,13 @@ func (h *AccountHandler) Test(c *gin.Context) {
 
 	var req TestAccountRequest
 	// Allow empty body, model_id is optional
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		response.BadRequest(c, "Invalid test request")
+		return
+	}
+	if req.CodexSessionOverride != nil {
+		c.Set(service.CodexSessionTestOverrideKey, *req.CodexSessionOverride)
+	}
 
 	// Use AccountTestService to test the account with SSE streaming
 	testType := req.TestType

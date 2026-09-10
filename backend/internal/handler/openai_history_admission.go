@@ -16,6 +16,13 @@ import (
 
 const opsOpenAIHistoryErrorKey = "ops_openai_history_error"
 
+// 上游失败后，严格账号被历史策略排除只是无可用兜底，不能覆盖真实上游错误。
+// 归属存储故障与冲突仍须独立返回，首次历史准入拒绝也不改变。
+func preserveOpenAIUpstreamErrorAfterHistoryExhausted(err error, upstream *service.UpstreamFailoverError) bool {
+	return upstream != nil && errors.Is(err, service.ErrOpenAIExternalHistory) &&
+		!errors.Is(err, service.ErrOpenAIHistoryUnavailable) && !errors.Is(err, service.ErrOpenAIHistoryConflict)
+}
+
 // 等待后再次验证，策略变化只否决当前候选，不消耗上游故障转移次数。
 func (h *OpenAIGatewayHandler) acquireOpenAIHistoryAccountSlot(c *gin.Context, groupID *int64, sessionHash string, selection *service.AccountSelectionResult, stream bool, started *bool, log *zap.Logger) (func(), bool, bool) {
 	release, acquired := h.acquireResponsesAccountSlot(c, groupID, sessionHash, selection, stream, started, log)

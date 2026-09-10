@@ -1222,7 +1222,29 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
   return data
 }
 
+export interface CodexSessionOverride {
+  enabled: boolean
+  session_id: string
+}
+
+export interface CodexSessionConfiguration extends CodexSessionOverride {
+  supported: boolean
+  effective_session_id: string
+}
+
+export async function getCodexSession(id: number): Promise<CodexSessionConfiguration> {
+  const { data } = await apiClient.get<CodexSessionConfiguration>(`/admin/accounts/${id}/codex-session`)
+  return data
+}
+
+export async function saveCodexSession(id: number, value: CodexSessionOverride): Promise<CodexSessionConfiguration> {
+  const { data } = await apiClient.put<CodexSessionConfiguration>(`/admin/accounts/${id}/codex-session`, value)
+  return data
+}
+
 export const accountsAPI = {
+  getCodexSession,
+  saveCodexSession,
   list,
   listWithEtag,
   getById,

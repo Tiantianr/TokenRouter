@@ -705,7 +705,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
-			if h.handleOpenAIHistoryError(c, err, false, streamStarted) {
+			if !preserveOpenAIUpstreamErrorAfterHistoryExhausted(err, lastFailoverErr) && h.handleOpenAIHistoryError(c, err, false, streamStarted) {
 				return
 			}
 			reqLog.Warn("openai.account_select_failed",
@@ -1321,7 +1321,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
-			if h.handleOpenAIHistoryError(c, err, true, streamStarted) {
+			if !preserveOpenAIUpstreamErrorAfterHistoryExhausted(err, lastFailoverErr) && h.handleOpenAIHistoryError(c, err, true, streamStarted) {
 				return
 			}
 			reqLog.Warn("openai_messages.account_select_failed",
@@ -1661,6 +1661,8 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 		h.anthropicStreamingAwareError(c, status, "api_error", failoverErr.ClientMessage, streamStarted)
 		return
 	}
+	// 与 Responses 一致，候选耗尽后仍为错误列表保留原始上游状态与安全提取的信息。
+	service.SetOpsUpstreamError(c, failoverErr.StatusCode, service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "")
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
@@ -2518,7 +2520,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
-			if writeOpenAIHistoryWSError(c, ctx, wsConn, err, false) {
+			if !preserveOpenAIUpstreamErrorAfterHistoryExhausted(err, lastFailoverErr) && writeOpenAIHistoryWSError(c, ctx, wsConn, err, false) {
 				return
 			}
 			reqLog.Warn("openai.websocket_account_select_failed",

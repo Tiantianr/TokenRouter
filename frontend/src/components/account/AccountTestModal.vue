@@ -90,6 +90,8 @@
         />
       </div>
 
+      <CodexSessionControl v-if="show && account && testType === 'text' && testMode === 'default'" :account="account" :busy="status === 'connecting'" @draft="sessionDraft = $event" @saved="emit('updated')" />
+
       <!-- Terminal Output -->
       <div class="group relative">
         <div
@@ -256,6 +258,8 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
+import CodexSessionControl from '@/components/account/CodexSessionControl.vue'
+import type { CodexSessionOverride } from '@/api/admin/accounts'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
@@ -282,7 +286,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'updated'): void
 }>()
+
+const sessionDraft = ref<CodexSessionOverride | null>(null)
 
 const terminalRef = ref<HTMLElement | null>(null)
 const status = ref<'idle' | 'connecting' | 'success' | 'error'>('idle')
@@ -358,6 +365,7 @@ watch(
   () => props.show,
   async (newVal) => {
     if (newVal && props.account) {
+      sessionDraft.value = null
       testPrompt.value = ''
       lastDefaultPrompt = ''
       testMode.value = 'default'
@@ -477,6 +485,7 @@ const startTest = async () => {
         model_id: selectedModelId.value,
         prompt: isCompactTestMode.value ? '' : testPrompt.value.trim(),
         test_type: testType.value,
+        ...(sessionDraft.value && testType.value === 'text' && testMode.value === 'default' ? { codex_session_override: sessionDraft.value } : {}),
         mode: isOpenAIAccount.value ? testMode.value : 'default'
       }),
       signal: abortController.signal

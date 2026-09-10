@@ -167,7 +167,9 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"quota_daily_reset_at":  {},
 	"quota_weekly_reset_at": {},
 	// Codex 收敛 seed 由系统按账号生成，复制账号时必须重新生成。
-	codexFingerprintSeedExtraKey: {},
+	codexFingerprintSeedExtraKey:   {},
+	codexSessionOverrideEnabledKey: {},
+	codexSessionOverrideIDKey:      {},
 	// 上游观测、能力探测与临时调度状态不属于可复制配置。
 	"model_rate_limits":                           {},
 	"session_window_utilization":                  {},
