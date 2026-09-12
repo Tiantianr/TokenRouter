@@ -155,6 +155,8 @@ func TestPromptAuditChatCapacityDeletesOldestContentAndKeepsEvents(t *testing.T)
 	oldSnapshot.SessionKey = HashSessionKey(userID, oldSnapshot.Protocol, "header:session-id", "capacity-old")
 	oldSnapshot.SessionSource = "client_session"
 	oldSnapshot.FullPrompt = strings.Repeat("o", 100)
+	oldSnapshot.FullContextCiphertext = "old-context"
+	oldSnapshot.FullContextHash = "old-context-hash"
 	oldEvent, err := repo.RecordBlocking(ctx, oldSnapshot, 1, integrationResult(EventCritical), false)
 	require.NoError(t, err)
 	require.NotZero(t, oldEvent.Snapshot.ChatRecordID)
@@ -164,6 +166,8 @@ func TestPromptAuditChatCapacityDeletesOldestContentAndKeepsEvents(t *testing.T)
 	newSnapshot.SessionKey = HashSessionKey(userID, newSnapshot.Protocol, "header:session-id", "capacity-new")
 	newSnapshot.SessionSource = "client_session"
 	newSnapshot.FullPrompt = strings.Repeat("n", 30)
+	newSnapshot.FullContextCiphertext = "new-context"
+	newSnapshot.FullContextHash = "new-context-hash"
 	newEvent, err := repo.RecordBlocking(ctx, newSnapshot, 1, integrationResult(EventCritical), false)
 	require.NoError(t, err)
 	require.NotZero(t, newEvent.Snapshot.ChatRecordID)
