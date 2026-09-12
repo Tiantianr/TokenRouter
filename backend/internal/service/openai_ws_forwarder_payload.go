@@ -194,6 +194,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	)
 
 	s.guardOpenAICodexTurnStateEcho(c, account, headers)
+	applyCodexAccountTurnHeaders(c, account, headers)
 	return headers, sessionResolution, nil
 }
 

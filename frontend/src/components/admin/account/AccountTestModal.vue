@@ -90,7 +90,7 @@
         />
       </div>
 
-      <CodexSessionControl v-if="show && account && testType === 'text' && testMode === 'default'" :account="account" :busy="status === 'connecting'" @draft="sessionDraft = $event" @pending="sessionConfigPending = $event" @saved="emit('updated')" />
+      <CodexSessionControl v-if="show && account && testType === 'text' && testMode === 'default'" :account="account" :busy="status === 'connecting'" :captured="capturedTurnState" @draft="sessionDraft = $event" @turn-draft="turnStateDraft = $event" @pending="sessionConfigPending = $event" @saved="emit('updated')" />
 
       <!-- Terminal Output -->
       <div class="group relative">
@@ -259,7 +259,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import CodexSessionControl from '@/components/account/CodexSessionControl.vue'
-import type { CodexSessionOverride } from '@/api/admin/accounts'
+import type { CodexSessionOverride, CodexTurnStateTestOverride } from '@/api/admin/accounts'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
@@ -290,6 +290,8 @@ const emit = defineEmits<{
   (e: 'updated'): void
 }>()
 const sessionDraft = ref<CodexSessionOverride | null>(null)
+const turnStateDraft = ref<CodexTurnStateTestOverride | null>(null)
+const capturedTurnState = ref<CodexTurnStateTestOverride | null>(null)
 const sessionConfigPending = ref(false)
 
 const terminalRef = ref<HTMLElement | null>(null)
@@ -367,6 +369,8 @@ watch(
   async (newVal) => {
     if (newVal && props.account) {
       sessionDraft.value = null
+      turnStateDraft.value = null
+      capturedTurnState.value = null
       testPrompt.value = ''
       lastDefaultPrompt = ''
       testMode.value = 'default'
@@ -478,6 +482,7 @@ const startTest = async () => {
       test_type: 'text' | 'image'
       mode?: 'default' | 'compact' | 'legacy_compact'
       codex_session_override?: CodexSessionOverride
+      codex_turn_state_override?: CodexTurnStateTestOverride
     } = {
       model_id: selectedModelId.value,
       prompt: isCompactTestMode.value ? '' : testPrompt.value.trim(),
@@ -488,6 +493,9 @@ const startTest = async () => {
     }
     if (sessionDraft.value && testType.value === 'text' && testMode.value === 'default') {
       requestBody.codex_session_override = sessionDraft.value
+    }
+    if (turnStateDraft.value && testType.value === 'text' && testMode.value === 'default') {
+      requestBody.codex_turn_state_override = turnStateDraft.value
     }
 
     // SSE 测试接口用 POST，只能走 fetch，必须显式套用配置的 API base。
@@ -561,6 +569,9 @@ const handleEvent = (event: {
   mime_type?: string
   session_id?: string
   thread_id?: string
+  turn_id?: string
+  turn_state?: string
+  identity?: string
 }) => {
   switch (event.type) {
     case 'test_start':
@@ -585,6 +596,12 @@ const handleEvent = (event: {
       if (event.text) {
         streamingContent.value += event.text
         scrollToBottom()
+      }
+      break
+
+    case 'codex_turn_state':
+      if (turnStateDraft.value && event.turn_id === turnStateDraft.value.turn_id && event.turn_state) {
+        capturedTurnState.value = { turn_id: event.turn_id, turn_state: event.turn_state, identity: event.identity }
       }
       break
 

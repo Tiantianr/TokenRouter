@@ -320,6 +320,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	responseHeaders := lease.HandshakeHeaders()
+	turnSnapshot := stagedCodexAccountTurn(c, account)
 	if lease.Reused() {
 		// 旧连接的建连响应不是当前 turn 新签发的状态。
 		responseHeaders.Del(openAIWSTurnStateHeader)
@@ -888,6 +889,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
+	if !clientDisconnected && upstreamWarning == nil && (upstreamTerminalEvent == "response.completed" || upstreamTerminalEvent == "response.done") {
+		s.rotateCodexAccountTurn(ctx, turnSnapshot, extractOpenAICodexTurnState(responseHeaders))
+	}
 	return &OpenAIForwardResult{
 		RequestID:                   responseID,
 		Usage:                       *usage,

@@ -91,3 +91,41 @@ func TestAccountTestCodexSessionSaveAndDraftUseSameThread(t *testing.T) {
 		})
 	}
 }
+
+// 测试弹窗的 turn_id 与上游回合状态只在当前测试会话内复用，不写入账号配置。
+func TestAccountTestCodexTurnStateCapturesAndReusesAfterSuccess(t *testing.T) {
+	account := codexSessionFlowAccount()
+	account.Extra[codexFingerprintModeExtraKey] = "session"
+	upstream := &queuedHTTPUpstream{}
+	svc := &AccountTestService{accountRepo: &codexSessionSaveRepo{account: account}, httpUpstream: upstream}
+	draft := CodexTurnStateTestOverride{
+		TurnID:    "44444444-4444-4444-8444-444444444444",
+		TurnState: "",
+	}
+
+	first := newJSONResponse(http.StatusOK, "data: {\"type\":\"response.completed\"}\n\n")
+	first.Header.Set(openAICodexTurnStateHeader, "turn-state-1")
+	upstream.responses = append(upstream.responses, first)
+	firstContext, firstRecorder := newTestContext()
+	firstContext.Set(CodexTurnStateTestOverrideKey, draft)
+	require.NoError(t, svc.TestAccountConnection(firstContext, account.ID, "gpt-5.1", "hi", AccountTestModeDefault, AccountTestTypeText))
+	require.Contains(t, firstRecorder.Body.String(), `"type":"codex_turn_state"`)
+	require.Contains(t, firstRecorder.Body.String(), `"turn_state":"turn-state-1"`)
+	firstRequest := upstream.requests[0]
+	firstTurnID := firstRequest.Header.Get("turn-id")
+	require.NotEmpty(t, firstTurnID)
+	firstBody, err := io.ReadAll(firstRequest.Body)
+	require.NoError(t, err)
+	require.Equal(t, firstTurnID, gjson.GetBytes(firstBody, "client_metadata.turn_id").String())
+
+	draft.TurnState = "turn-state-1"
+	draft.Identity = codexAccountTurnIdentity(account)
+	second := newJSONResponse(http.StatusOK, "data: {\"type\":\"response.completed\"}\n\n")
+	upstream.responses = append(upstream.responses, second)
+	secondContext, _ := newTestContext()
+	secondContext.Set(CodexTurnStateTestOverrideKey, draft)
+	require.NoError(t, svc.TestAccountConnection(secondContext, account.ID, "gpt-5.1", "continue", AccountTestModeDefault, AccountTestTypeText))
+	secondRequest := upstream.requests[1]
+	require.Equal(t, firstTurnID, secondRequest.Header.Get("turn-id"))
+	require.Equal(t, "turn-state-1", secondRequest.Header.Get(openAICodexTurnStateHeader))
+}

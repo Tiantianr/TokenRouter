@@ -358,6 +358,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if !forceHTTPBridge {
 			// 原生 WS 不经过 HTTP Forward，须在此逐轮生成并暂存收敛身份。
+			if err := s.prepareCodexAccountTurn(ctx, c, account, true); err != nil {
+				return openAIWSClientPayload{}, err
+			}
 			next, fingerprintErr := prepareCodexWSFingerprintTurn(c, account, normalized, accountIdentitySourceRaw)
 			if fingerprintErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", fingerprintErr)
@@ -962,6 +965,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
+	// 每个新连接的握手状态最多确认一次，后续轮次不能把旧握手重新当成新状态。
+	seenAccountTurnHandshakes := make(map[string]bool)
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, routingModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
 		responseModelObserver := upstreamResponseModelObserverFromContext(c)
 		if responseModelObserver == nil {
@@ -970,6 +975,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
+		accountTurnSnapshot := stagedCodexAccountTurn(c, account)
+		accountTurnFailed := false
+		accountTurnState := ""
+		if !lease.Reused() && !seenAccountTurnHandshakes[lease.ConnID()] {
+			accountTurnState = extractOpenAICodexTurnState(lease.HandshakeHeaders())
+		}
+		seenAccountTurnHandshakes[lease.ConnID()] = true
 		turnStart := time.Now()
 		wroteDownstream := false
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
@@ -1043,6 +1055,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				lastEventType = eventType
 			}
 			if eventType == "error" {
+				accountTurnFailed = true
 				canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
 				errorDecision := s.handleOpenAIWSErrorEventTransientFailure(ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
@@ -1266,6 +1279,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					)
 				}
 				imageCount := imageCounter.Count()
+				if !clientDisconnected && !accountTurnFailed && codexTurnSuccessfulEvent(upstreamMessage) {
+					s.rotateCodexAccountTurn(ctx, accountTurnSnapshot, accountTurnState)
+				}
 				result := &OpenAIForwardResult{
 					RequestID:                   responseID,
 					Usage:                       usage,

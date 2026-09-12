@@ -1225,6 +1225,24 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
 export interface CodexSessionOverride {
   enabled: boolean
   session_id: string
+  account_turn?: CodexAccountTurnConfiguration
+}
+
+export interface CodexTurnStateTestOverride {
+  turn_id: string
+  turn_state: string
+  identity?: string
+  disabled?: boolean
+}
+
+// 首次保存和自动轮换共用版本号，旧弹窗保存时由服务端拒绝覆盖新状态。
+export interface CodexAccountTurnConfiguration {
+  enabled: boolean
+  turn_id: string
+  turn_state: string
+  revision: string
+  identity: string
+  updated_at: string
 }
 
 export interface CodexSessionConfiguration extends CodexSessionOverride {

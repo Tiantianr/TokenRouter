@@ -211,6 +211,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
+	if err := s.prepareCodexAccountTurn(ctx, c, account); err != nil {
+		return nil, err
+	}
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
@@ -546,6 +549,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			stageCodexClientIdentity(c, body)
 			fingerprintIDs = resolveCodexFingerprintIDsForTurn(fingerprintAccount, clientHeaders, body, getAPIKeyIDFromContext(c))
+			applyCodexAccountTurnIDs(c, account, fingerprintIDs)
 			// HTTP 转上游 WS 时也必须让握手头与本轮请求体使用同一份身份。
 			stageCodexFingerprintIDs(c, fingerprintIDs)
 			if applyCodexFingerprintClientMetadata(decoded, fingerprintIDs) {
@@ -980,6 +984,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		// 内部重试每次都会重建 request，必须重复应用与 body 相同的指纹 IDs。
 		applyCodexFingerprintHeaders(upstreamReq.Header, fingerprintIDs)
+		applyCodexAccountTurnHeaders(c, account, upstreamReq.Header)
 
 		proxyURL := ""
 		if account.ProxyID != nil && account.Proxy != nil {
@@ -1125,6 +1130,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		reqBody = nil
 
 		var usage *OpenAIUsage
+		turnSnapshot := stagedCodexAccountTurn(c, account)
+		turnObserver := observeCodexTurnResponse(resp, turnSnapshot, c)
+		defer turnObserver.restore(c)
 		var firstTokenMs *int
 		responseID := ""
 		imageCount := 0
@@ -1199,6 +1207,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseID = strings.TrimSpace(nonStreamResult.responseID)
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
+		}
+		if turnObserver.successful() {
+			s.rotateCodexAccountTurn(ctx, turnSnapshot, extractOpenAICodexTurnState(resp.Header))
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 

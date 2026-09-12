@@ -6,6 +6,7 @@
 
 - [账号与凭据](#账号与凭据)：修改 OAuth、API Key、隐私或客户端限制时读取。
 - [Codex 身份与会话](#codex_identity_projection)：修改固定 session、线程投影、父子引用或窗口元数据时读取。
+- [账号级固定回合与状态轮换](#codex_account_turn_reuse)：修改测试捕获、保存、正式请求复用和状态 CAS 时读取。
 - [协议与传输](#协议与传输)：修改 Responses、WebSocket、Realtime 或兼容转换时读取。
 - [远程压缩协议](#远程压缩协议)：区分原生 `remote_compaction_v2` 与旧版 `/responses/compact` 时读取。
 - [WS 执行与回合状态](#codex_ws_turn_state)：修改连接复用、turn-state 来源或回带规则时读取。
@@ -39,6 +40,21 @@ OpenAI OAuth 账号的 `extra.codex_fingerprint_mode` 控制 Codex Responses 的
 普通文字账号测试使用 HTTP Responses，并应用账号现有收敛配置；未携带客户端会话头时使用按账号稳定派生的独立测试会话。`session` 模式下更换候选 ID 只改变 session，不会同时更换测试 thread，保存前后复测也保持该 thread；`full` 模式仍按配置令 thread 等于 session。SSE 开始事件返回实际出站的 `session_id` 和 `thread_id`，界面显示用于核对。测试不包含真实历史、工具回合或多人并发，因此不能把单次成功当作持续可用或回答质量保证。
 
 OpenAI 兼容请求的显式粘性会话头按 `session-id`、`session_id`、`conversation_id`、OpenCode 会话头和 CodeBuddy 会话头依次读取；其中 `session-id` 是 Codex 客户端使用的连字符形式，优先于旧下划线形式。WebSocket 会话日志采用相同优先级，缺少显式会话头时才回退到 `prompt_cache_key`，避免重连时因头名差异漂移到其它账号。
+
+<a id="codex_account_turn_reuse"></a>
+### 账号级固定回合与状态轮换
+
+OpenAI OAuth 凭据母账号在 `session` / `full` 模式下可显式启用账号级固定回合。默认关闭；管理员先随机 `turn_id`，进行普通文字测试，确认回复正常后保存。测试草稿的 UUID 就是实际出站 UUID，不再按客户端 Key 二次派生。成功终态后，测试 SSE 的 `codex_turn_state` 事件返回 `turn_id`、非空 `turn_state` 与身份绑定 `identity`；失败、中断或空状态不覆盖已有草稿。更换会话或随机回合会清空旧草稿状态，必须重新测试。
+
+`GET/PUT /api/v1/admin/accounts/:id/codex-session` 在原有 `enabled` / `session_id` 外增加可选 `account_turn` 对象，包含 `enabled`、`turn_id`、`turn_state`、`revision`、`identity`、`updated_at`。同一保存按钮原子保存会话与回合配置；启用时要求已捕获非空合法状态，版本和身份必须匹配，否则返回 409 或参数错误。省略 `account_turn` 兼容旧客户端单独保存 session，但改变会话会废弃旧回合状态。状态保存在受管 `accounts.extra.codex_account_turn` 中，普通编辑、批量更新和导入不能覆盖；复制账号不会继承它，普通账号 DTO 不返回原始状态，专用管理员接口才返回。
+
+启用后的原生 Responses HTTP（含 SSE 转 JSON、OAuth passthrough）及 Responses WebSocket 使用固定 `turn_id` 和当前状态，头部 `turn-id` / `turn_id`、flat/内嵌 `client_metadata` 保持一致。影子账号继承凭据母账号配置，状态写回母账号。账号显式配置的状态优先于客户端回带；未启用时仍按原有客户端状态来源守卫处理。该功能不应用于 Messages / Chat 兼容桥、图片测试或旧版 Compact 端点。
+
+正式请求仅在完整成功终态且客户端未取消、未发生写失败时，才以新的非空响应头状态替换账号状态。HTTP 200、失败/不完整/取消终态、流中断或没有状态头均不足以触发更新；不透明状态无法通过内容验证其长期有效性，协议成功也不代表回答质量保证。数据库 CAS 比较当前回合配置、会话、模式、seed、device、账号类型和凭据快照，并在同一 SQL 中写入调度 outbox：同一版本的并发请求只允许一个更新成功，其它结果丢弃；旧弹窗保存及禁用前的旧响应不能覆盖新版本。与身份无关的配额观测不导致 CAS 失败，普通账号整对象保存持锁合并最新受管状态。新请求读取数据库最新状态，不依赖调度快照刷新速度。
+
+身份绑定包含本地凭据所有者、上游账号/用户、设备、收敛模式及 session。正常 access token 刷新保持稳定身份，刷新前的在途响应因凭据 CAS 变化不能写回。管理员重新授权、手动或批量替换 token、改变会话或设备/模式时，在同一写入中清理旧状态，需重新测试保存。关闭回合开关并保存会清空状态，之后恢复原有 turn 投影及客户端回带行为。
+
+WebSocket 的状态头只在建连时发送，新建连接的握手状态在首轮成功后最多确认一次；连接复用和后续轮次没有新响应头，不能重复把旧握手当成新签发状态。已建立的入站 WS 保持原会话与固定回合身份，配置变更需重新连接；账号状态轮换用于之后的新建连接。固定回合不会合并不同用户或原始线程的连接隔离。
 
 <a id="openai_protocol_dispatch"></a>
 ## 协议与传输
@@ -116,7 +132,7 @@ OpenAI OAuth 的 HTTP、passthrough、旧版 Compact 与 WebSocket 出站会在�
 
 `x-codex-beta-features` 是 Codex 的会话级协商头：OAuth 普通 Responses HTTP 与 WebSocket 握手在客户端未声明时补入 `remote_compaction_v2`，客户端给出的非空值保持原样；原生 V2 请求无论账号类型都保证该 feature 存在。上游响应中的 `x-codex-turn-state` 会在 HTTP/SSE、SSE 转 JSON 与 passthrough 路径显式回传。网关对具体状态值的哈希记录签发作用域，包含用户 Key、原始线程、已知 turn、凭据所有者及身份配置；HTTP 和 WS 出站共用来源守卫，剥离已知不匹配的回带值。未知来源或过期的客户端回带仍透传；来源表是进程内、有 TTL 的追踪，不是跨实例的完备证明。
 
-跨请求不再从 session 缓存自动补入 turn-state。原生 WS 仅在同一已知 turn 内为重连保留刚收到的握手状态，新 turn 清空；复用连接时不能把旧建连响应当成新 turn 的签发状态再次回传。客户端未提供 turn 时也不推定下一请求属于同一回合。线程隔离和配置边界见[WebSocket 执行隔离](../architecture/account_scheduling_and_cache.md#websocket_execution_isolation)。
+未启用[账号级固定回合](#codex_account_turn_reuse)时，跨请求不从 session 缓存自动补入 turn-state。原生 WS 仅在同一已知 turn 内为重连保留刚收到的握手状态，新 turn 清空；复用连接时不能把旧建连响应当成新 turn 的签发状态再次回传。客户端未提供 turn 时也不推定下一请求属于同一回合。线程隔离和配置边界见[WebSocket 执行隔离](../architecture/account_scheduling_and_cache.md#websocket_execution_isolation)。
 
 WebSocket 连接池把 routing hint 视为拨号和普通复用的软亲和：优先复用相同提示建立的连接，池满时仍可在硬兼容连接上排队，显式 continuation 也不会仅因提示变化而断链。用户线程及身份配置、握手 beta feature 与本 fork 的 TLS fingerprint profile 是硬兼容边界，变化后禁止复用，并会使尚未完成的旧目标预热拨号失效。同一线程的窗口序号递增可复用连接。路由诊断只记录网关推导的最终模型、规范化 tier、传输类型、账号 ID、是否生成提示和 WS 亲和决策，不记录提示头值、token 或凭据。
 

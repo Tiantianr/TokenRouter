@@ -105,6 +105,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			// 与普通转发和 WS 共用已经解析的母账号，避免影子账号身份分裂。
 			fingerprintIDs := resolveCodexFingerprintIDsForTurn(codexAccountIdentitySource(c, account), clientHeaders, originalIdentityBody, getAPIKeyIDFromContext(c))
+			applyCodexAccountTurnIDs(c, account, fingerprintIDs)
 			if fingerprintIDs != nil {
 				updatedBody, changed, fingerprintErr := applyCodexFingerprintClientMetadataRaw(body, fingerprintIDs)
 				if fingerprintErr != nil {
@@ -359,6 +360,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			s.noteOpenAICodexTurnStateProvenance(c, account, extractOpenAICodexTurnState(resp.Header))
 		}
 
+		turnSnapshot := stagedCodexAccountTurn(c, account)
+		turnObserver := observeCodexTurnResponse(resp, turnSnapshot, c)
+		defer turnObserver.restore(c)
 		if reqStream {
 			result, handleErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 			if handleErr != nil {
@@ -412,6 +416,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			responseID = strings.TrimSpace(result.responseID)
 			imageCount = result.imageCount
 			imageOutputSizes = result.imageOutputSizes
+		}
+		if turnObserver.successful() {
+			s.rotateCodexAccountTurn(ctx, turnSnapshot, extractOpenAICodexTurnState(resp.Header))
 		}
 		break
 	}
@@ -621,6 +628,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 
 	account.ApplyHeaderOverrides(req.Header)
+	applyCodexAccountTurnHeaders(c, account, req.Header)
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")

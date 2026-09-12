@@ -74,6 +74,7 @@ func prepareCodexWSFingerprintTurn(c *gin.Context, account *Account, body []byte
 	}
 	stageCodexClientIdentity(c, source)
 	ids := resolveCodexFingerprintIDsForTurn(codexAccountIdentitySource(c, account), headers, source, getAPIKeyIDFromContext(c))
+	applyCodexAccountTurnIDs(c, account, ids)
 	// 包括 off 模式在内均覆盖上下文，防止故障转移残留上一账号身份。
 	stageCodexFingerprintIDs(c, ids)
 	next, _, err := applyCodexFingerprintClientMetadataRaw(body, ids)
@@ -132,6 +133,7 @@ func stripCodexFingerprintSeed(extra map[string]any) map[string]any {
 	delete(stripped, codexFingerprintSeedExtraKey)
 	delete(stripped, codexSessionOverrideEnabledKey)
 	delete(stripped, codexSessionOverrideIDKey)
+	delete(stripped, CodexAccountTurnExtraKey)
 	return stripped
 }
 
@@ -182,7 +184,7 @@ func prepareCodexFingerprintExtraForUpdate(account *Account, extra map[string]an
 		return prepared
 	}
 	// 指定会话只能经专用接口修改，旧编辑器或整对象保存不得清空或覆盖。
-	for _, key := range []string{codexSessionOverrideEnabledKey, codexSessionOverrideIDKey} {
+	for _, key := range []string{codexSessionOverrideEnabledKey, codexSessionOverrideIDKey, CodexAccountTurnExtraKey} {
 		if value, ok := account.Extra[key]; ok {
 			if prepared == nil {
 				prepared = make(map[string]any)
@@ -214,6 +216,7 @@ func sanitizedCodexFingerprintExtraUpdates(updates map[string]any) map[string]an
 	delete(sanitized, codexFingerprintSeedExtraKey)
 	delete(sanitized, codexSessionOverrideEnabledKey)
 	delete(sanitized, codexSessionOverrideIDKey)
+	delete(sanitized, CodexAccountTurnExtraKey)
 	return sanitized
 }
 
@@ -310,6 +313,7 @@ type codexFingerprintIDs struct {
 	lineage                       map[string]any // 原始回合的父子引用和窗口信息
 	scopedCacheKey                string         // 账号隔离后的复合缓存键
 	convergedCacheKey             string         // 与收敛父线程同源的复合缓存键
+	fixedTurn                     bool           // 账号级显式固定时补齐两个 turn 头
 }
 
 // resolveCodexFingerprintIDs 按收敛模式计算出站 ID 集合。
@@ -415,6 +419,10 @@ func applyCodexFingerprintHeaders(h http.Header, ids *codexFingerprintIDs) {
 	h.Set("session-id", ids.sessionID)
 	h.Set("session_id", ids.sessionID)
 	h.Set("thread-id", ids.threadID)
+	if ids.fixedTurn {
+		h.Set("turn-id", ids.turnID)
+		h.Set("turn_id", ids.turnID)
+	}
 	for name, value := range map[string]string{"thread_id": ids.threadID, "turn_id": ids.turnID, "turn-id": ids.turnID, "window_id": ids.windowID, "window-id": ids.windowID, "installation_id": ids.installationID} {
 		if h.Get(name) != "" {
 			h.Set(name, value)

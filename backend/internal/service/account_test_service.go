@@ -111,6 +111,9 @@ type TestEvent struct {
 	// 仅管理员测试返回实际出站身份，便于核对草稿与保存后的请求。
 	SessionID string `json:"session_id,omitempty"`
 	ThreadID  string `json:"thread_id,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
+	TurnState string `json:"turn_state,omitempty"`
+	Identity  string `json:"identity,omitempty"`
 }
 
 const (
@@ -419,6 +422,15 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		}
 		account, err = accountWithCodexSessionDraft(account, draft)
 		if err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
+	}
+	if raw, exists := c.Get(CodexTurnStateTestOverrideKey); exists {
+		override, ok := raw.(CodexTurnStateTestOverride)
+		if !ok || testType == AccountTestTypeImage || mode != AccountTestModeDefault {
+			return s.sendErrorAndEnd(c, "Turn state drafts require a normal text test")
+		}
+		if err := validateCodexTurnStateTestOverride(account, override); err != nil {
 			return s.sendErrorAndEnd(c, err.Error())
 		}
 	}
@@ -1025,12 +1037,26 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// 测试复用正式收敛规则，以固定的独立客户端会话模拟真实线程。
 	// 更换候选 ID 不再同时更换 thread；保存前后也复用同一测试线程。
 	var sessionTestIDs *codexFingerprintIDs
+	var turnStateTestOverride CodexTurnStateTestOverride
 	if isOAuth {
 		testHeaders := c.Request.Header.Clone()
 		if extractClientSessionID(testHeaders) == "" {
 			testHeaders.Set("session-id", deriveStableUUIDv4(fmt.Sprintf("sub2api:codex-account-test-client:v1:%d", credentialAccount.ID)))
 		}
+		if raw, ok := c.Get(CodexTurnStateTestOverrideKey); ok {
+			var valid bool
+			turnStateTestOverride, valid = raw.(CodexTurnStateTestOverride)
+			if !valid {
+				return s.sendErrorAndEnd(c, "Invalid turn state draft")
+			}
+		} else if saved := effectiveCodexAccountTurn(credentialAccount); saved.Enabled {
+			turnStateTestOverride = CodexTurnStateTestOverride{TurnID: saved.TurnID, TurnState: saved.TurnState, Identity: saved.Identity}
+		}
 		sessionTestIDs = resolveCodexFingerprintIDsFromRequest(credentialAccount, testHeaders)
+		if sessionTestIDs != nil && !turnStateTestOverride.Disabled && turnStateTestOverride.TurnID != "" {
+			// 测试和保存后都直接使用所选 UUID，避免二次投影改变回合身份。
+			sessionTestIDs.turnID, sessionTestIDs.fixedTurn = turnStateTestOverride.TurnID, true
+		}
 		applyCodexFingerprintClientMetadata(payload, sessionTestIDs)
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -1087,6 +1113,14 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 	applyCodexFingerprintHeaders(req.Header, sessionTestIDs)
+	if isOAuth && !turnStateTestOverride.Disabled && turnStateTestOverride.TurnID != "" && sessionTestIDs != nil {
+		// 测试草稿显式固定 turn_id 时，头与 client_metadata 必须使用同一个收敛值。
+		req.Header.Set("turn-id", sessionTestIDs.turnID)
+		req.Header.Set("turn_id", sessionTestIDs.turnID)
+	}
+	if isOAuth && !turnStateTestOverride.Disabled && turnStateTestOverride.TurnState != "" {
+		req.Header.Set("x-codex-turn-state", turnStateTestOverride.TurnState)
+	}
 	// 与正式 HTTP Responses 使用相同的能力协商和最终模型路由提示。
 	applyOpenAICodexBetaFeatures(c, credentialAccount, req.Header)
 	setOpenAICodexRoutingHint(req.Header, credentialAccount, upstreamTestModelID, "")
@@ -1132,7 +1166,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
-	// Process SSE stream
+	// Process SSE stream；状态只在收到 response.completed 后回填给测试弹窗。
+	if isOAuth && !turnStateTestOverride.Disabled && turnStateTestOverride.TurnID != "" {
+		return s.processOpenAIStreamWithTurnState(c, resp.Body, turnStateTestOverride.TurnID, resp.Header.Get("x-codex-turn-state"), codexAccountTurnIdentity(credentialAccount))
+	}
 	return s.processOpenAIStream(c, resp.Body)
 }
 
@@ -2572,6 +2609,10 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
+	return s.processOpenAIStreamWithTurnState(c, body, "", "")
+}
+
+func (s *AccountTestService) processOpenAIStreamWithTurnState(c *gin.Context, body io.Reader, turnID, turnState string, identity ...string) error {
 	reader := bufio.NewReader(body)
 	for {
 		line, err := reader.ReadString('\n')
@@ -2606,6 +2647,16 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
+			if !codexTurnSuccessfulEvent([]byte(jsonStr)) {
+				return s.sendErrorAndEnd(c, "Response did not complete successfully")
+			}
+			if turnID != "" && validCodexTurnState(turnState) {
+				event := TestEvent{Type: "codex_turn_state", TurnID: turnID, TurnState: turnState}
+				if len(identity) > 0 {
+					event.Identity = identity[0]
+				}
+				s.sendEvent(c, event)
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "response.failed":

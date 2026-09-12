@@ -109,6 +109,9 @@ func codexWSStateScope(c *gin.Context, account *Account) string {
 			}
 		}
 	}
+	if snapshot := stagedCodexAccountTurn(c, account); snapshot != nil {
+		execution += "\x00fixed-turn:" + snapshot.value.TurnID
+	}
 	return codexWSStateScopeForExecution(codexAccountIdentitySource(c, account), execution)
 }
 

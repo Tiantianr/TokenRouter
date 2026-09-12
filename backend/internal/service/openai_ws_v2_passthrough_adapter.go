@@ -884,6 +884,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstClientMessage = accountScopedFirst
 	}
 	// 透传首帧与握手必须共用身份，后续帧只更新逐轮字段。
+	if err := s.prepareCodexAccountTurn(ctx, c, account, true); err != nil {
+		return err
+	}
+	// 握手状态只属于首轮，捕获独立快照供响应 goroutine 使用。
+	accountTurnSnapshot := stagedCodexAccountTurn(c, account)
+	accountTurnFailed := false
 	firstClientMessage, scopeErr = prepareCodexWSFingerprintTurn(c, account, firstClientMessage, originalFirstIdentity)
 	if scopeErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket fingerprint metadata", scopeErr)
@@ -1406,6 +1412,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				)
 			},
 			OnUpstreamEvent: func(eventType string, payload []byte) {
+				if eventType == "error" {
+					accountTurnFailed = true
+				}
 				warning := buildOpenAIWSUpstreamWarning(eventType, payload)
 				if warning != nil && hooks != nil && hooks.OnUpstreamError != nil {
 					turnNo := int(completedTurns.Load()) + 1
@@ -1481,6 +1490,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
+					if writeErr == nil && !accountTurnFailed && codexTurnSuccessfulEvent(payload) {
+						s.rotateCodexAccountTurn(ctx, accountTurnSnapshot, extractOpenAICodexTurnState(handshakeHeaders))
+					}
+					// 同一连接后续轮次没有新响应头，不能重复提交首轮握手状态。
+					accountTurnSnapshot = nil
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
 				}
 			},

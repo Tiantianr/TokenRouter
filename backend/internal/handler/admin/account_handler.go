@@ -1120,9 +1120,11 @@ func (h *AccountHandler) Delete(c *gin.Context) {
 type TestAccountRequest struct {
 	// 测试草稿不落库，正式转发只读取专用配置接口保存的值。
 	CodexSessionOverride *service.CodexSessionOverride `json:"codex_session_override"`
-	ModelID              string                        `json:"model_id"`
-	Prompt               string                        `json:"prompt"`
-	Mode                 string                        `json:"mode"`
+	// 回合 ID 与上游状态只在当前测试弹窗会话内复用，不写入账号配置。
+	CodexTurnStateOverride *service.CodexTurnStateTestOverride `json:"codex_turn_state_override"`
+	ModelID                string                              `json:"model_id"`
+	Prompt                 string                              `json:"prompt"`
+	Mode                   string                              `json:"mode"`
 	// TestType 由管理端明确指定测试文字或图片，避免服务端猜测模型能力。
 	TestType string `json:"test_type"`
 	// TestMode 兼容早期客户端使用的字段名，优先级低于 test_type。
@@ -1160,6 +1162,9 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 	if req.CodexSessionOverride != nil {
 		c.Set(service.CodexSessionTestOverrideKey, *req.CodexSessionOverride)
+	}
+	if req.CodexTurnStateOverride != nil {
+		c.Set(service.CodexTurnStateTestOverrideKey, *req.CodexTurnStateOverride)
 	}
 
 	// Use AccountTestService to test the account with SSE streaming

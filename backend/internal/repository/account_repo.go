@@ -610,7 +610,10 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 			proxy_id IS NOT DISTINCT FROM $5,
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot'
+			extra -> 'ollama_cloud_usage_snapshot',
+			extra,
+			(credentials -> 'access_token' IS DISTINCT FROM $4::jsonb -> 'access_token'
+			 OR credentials -> 'refresh_token' IS DISTINCT FROM $4::jsonb -> 'refresh_token')
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -632,6 +635,8 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		currentOllamaSession         []byte
 		currentOllamaAutoRefresh     []byte
 		currentOllamaSnapshot        []byte
+		currentExtra                 []byte
+		codexTokensChanged           bool
 	)
 	if err := rows.Scan(
 		&ollamaGroupIdentityUnchanged,
@@ -639,6 +644,8 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		&currentOllamaSession,
 		&currentOllamaAutoRefresh,
 		&currentOllamaSnapshot,
+		&currentExtra,
+		&codexTokensChanged,
 	); err != nil {
 		return nil, err
 	}
@@ -647,6 +654,21 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	// 持锁读取最新的专用配置，避免普通编辑用旧副本覆盖成功响应刚轮换的状态。
+	var latest map[string]any
+	if err := json.Unmarshal(currentExtra, &latest); err != nil && len(currentExtra) > 0 {
+		return nil, err
+	}
+	for _, key := range []string{service.CodexAccountTurnExtraKey, "codex_session_override_enabled", "codex_session_override_id"} {
+		delete(extra, key)
+		if value, ok := latest[key]; ok {
+			extra[key] = value
+		}
+	}
+	service.InvalidateChangedCodexAccountTurn(account, extra)
+	if codexTokensChanged {
+		delete(extra, service.CodexAccountTurnExtraKey)
+	}
 	discardDeprecatedAccountExtra(extra)
 	for _, key := range []string{
 		service.OllamaCloudUsageSessionExtraKey,
@@ -2454,6 +2476,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 	}
+	extraExpression = invalidateCodexTurnPatchSQL(extraExpression, "", nil, updates)
 	result, err := client.ExecContext(
 		ctx,
 		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
@@ -2778,6 +2801,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		if updates.EnsureCodexFingerprintSeed {
 			extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 		}
+		extraExpression = invalidateCodexTurnPatchSQL(extraExpression, credentialPlaceholder, updates.Credentials, updates.Extra)
 		setClauses = append(setClauses, "extra = "+extraExpression)
 	}
 
