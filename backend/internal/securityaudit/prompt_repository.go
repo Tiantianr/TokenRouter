@@ -16,6 +16,9 @@ const (
 	promptAuditAdmissionLockKey     int64 = 579147893221901921
 	promptAuditConfigLockKey        int64 = 579147893221901922
 	promptAuditPassRetentionLockKey int64 = 579147893221901923
+	// PromptAuditChatMaxBytes 限制完整提示词正文和加密上下文的逻辑总大小。
+	// 删除后空间由 PostgreSQL 复用，避免物理表继续无限增长。
+	PromptAuditChatMaxBytes int64 = 10 * 1024 * 1024 * 1024
 )
 
 var (

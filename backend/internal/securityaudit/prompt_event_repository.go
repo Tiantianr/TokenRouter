@@ -224,6 +224,52 @@ func (r *PostgreSQLRepository) DeleteOrphanChatRecords(ctx context.Context, limi
 	return result.RowsAffected()
 }
 
+// @project-doc docs/domains/prompt_audit.md#chat_content_capacity
+// DeleteOldestChatRecordsToLimit 删除最老的完整聊天正文，直到逻辑正文大小不超过上限。
+// 事件元数据保留，chat_record_id 允许成为悬空引用；这与备份排除正文表的契约一致。
+func (r *PostgreSQLRepository) DeleteOldestChatRecordsToLimit(ctx context.Context, maxBytes int64, limit int) (deleted int64, remainingBytes int64, err error) {
+	if maxBytes <= 0 {
+		return 0, 0, nil
+	}
+	if limit < 1 || limit > 1000 {
+		limit = 500
+	}
+	result, err := r.db.ExecContext(ctx, `
+		WITH stats AS (
+			SELECT COALESCE(SUM(pg_column_size(full_prompt) + COALESCE(pg_column_size(context_ciphertext), 0)), 0)::bigint AS bytes
+			FROM prompt_audit_chat_records
+		), ranked AS (
+			SELECT id, created_at,
+			       ROW_NUMBER() OVER (ORDER BY created_at, id) AS row_number,
+			       SUM(pg_column_size(full_prompt) + COALESCE(pg_column_size(context_ciphertext), 0))
+			           OVER (ORDER BY created_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_bytes
+			FROM prompt_audit_chat_records
+		), victims AS (
+			SELECT ranked.id
+			FROM ranked CROSS JOIN stats
+			WHERE stats.bytes > $1
+			  AND (ranked.row_number = 1 OR ranked.cumulative_bytes <= stats.bytes - $1)
+			ORDER BY ranked.created_at, ranked.id
+			LIMIT $2
+		)
+		DELETE FROM prompt_audit_chat_records c
+		USING victims
+		WHERE c.id = victims.id`, maxBytes, limit)
+	if err != nil {
+		return 0, 0, err
+	}
+	deleted, err = result.RowsAffected()
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(pg_column_size(full_prompt) + COALESCE(pg_column_size(context_ciphertext), 0)), 0)::bigint
+		FROM prompt_audit_chat_records`).Scan(&remainingBytes); err != nil {
+		return deleted, 0, err
+	}
+	return deleted, remainingBytes, nil
+}
+
 type eventContextRecord struct {
 	Ciphertext string
 	SHA256     string

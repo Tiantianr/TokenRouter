@@ -196,8 +196,25 @@ func (s *PromptService) chatRetentionLoop(ctx context.Context) {
 				break
 			}
 		}
-		if deletedTotal > 0 || orphanedTotal > 0 {
-			LogInfo(EventChatRetentionCleaned, map[string]any{"status": "deleted", "deleted_count": deletedTotal + orphanedTotal})
+		var capacityDeleted int64
+		for cleanupCtx.Err() == nil {
+			deleted, remaining, err := s.repo.DeleteOldestChatRecordsToLimit(cleanupCtx, PromptAuditChatMaxBytes, 500)
+			if err != nil {
+				LogWarn(EventChatRetentionCleanupFailed, map[string]any{"status": "failed", "error_code": "chat_capacity_cleanup_failed"})
+				return
+			}
+			capacityDeleted += deleted
+			if deleted == 0 || remaining <= PromptAuditChatMaxBytes {
+				break
+			}
+		}
+		if deletedTotal > 0 || orphanedTotal > 0 || capacityDeleted > 0 {
+			LogInfo(EventChatRetentionCleaned, map[string]any{
+				"status":                 "deleted",
+				"deleted_count":          deletedTotal + orphanedTotal + capacityDeleted,
+				"capacity_deleted_count": capacityDeleted,
+				"capacity_bytes":         PromptAuditChatMaxBytes,
+			})
 		}
 	}
 	cleanup()

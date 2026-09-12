@@ -144,6 +144,44 @@ func TestPromptAuditSessionContentDeduplicatesAndExpiresIndependently(t *testing
 	require.Empty(t, session.Records)
 }
 
+func TestPromptAuditChatCapacityDeletesOldestContentAndKeepsEvents(t *testing.T) {
+	db := openPromptAuditIntegrationDB(t)
+	repo := NewPostgreSQLRepository(db)
+	ctx := context.Background()
+	userID := insertIdentity(t, db, "users")
+
+	oldSnapshot := integrationSnapshot("capacity-old")
+	oldSnapshot.UserID = userID
+	oldSnapshot.SessionKey = HashSessionKey(userID, oldSnapshot.Protocol, "header:session-id", "capacity-old")
+	oldSnapshot.SessionSource = "client_session"
+	oldSnapshot.FullPrompt = strings.Repeat("o", 100)
+	oldEvent, err := repo.RecordBlocking(ctx, oldSnapshot, 1, integrationResult(EventPass), false)
+	require.NoError(t, err)
+
+	newSnapshot := integrationSnapshot("capacity-new")
+	newSnapshot.UserID = userID
+	newSnapshot.SessionKey = HashSessionKey(userID, newSnapshot.Protocol, "header:session-id", "capacity-new")
+	newSnapshot.SessionSource = "client_session"
+	newSnapshot.FullPrompt = strings.Repeat("n", 30)
+	newEvent, err := repo.RecordBlocking(ctx, newSnapshot, 1, integrationResult(EventPass), false)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE prompt_audit_chat_records SET created_at=CASE WHEN id=$1 THEN NOW()-INTERVAL '2 minutes' ELSE NOW() END WHERE id IN ($1,$2)`, oldEvent.Snapshot.ChatRecordID, newEvent.Snapshot.ChatRecordID)
+	require.NoError(t, err)
+
+	deleted, remaining, err := repo.DeleteOldestChatRecordsToLimit(ctx, 50, 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	require.LessOrEqual(t, remaining, int64(50))
+	var eventCount, contentCount int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM prompt_audit_events`).Scan(&eventCount))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM prompt_audit_chat_records`).Scan(&contentCount))
+	require.Equal(t, 2, eventCount)
+	require.Equal(t, 1, contentCount)
+	var oldExists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_audit_chat_records WHERE id=$1)`, oldEvent.Snapshot.ChatRecordID).Scan(&oldExists))
+	require.False(t, oldExists)
+}
+
 func TestPromptAuditRiskChatContentUsesIndefiniteRetention(t *testing.T) {
 	db := openPromptAuditIntegrationDB(t)
 	repo := NewPostgreSQLRepository(db)
