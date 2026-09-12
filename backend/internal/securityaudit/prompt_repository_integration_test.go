@@ -155,16 +155,18 @@ func TestPromptAuditChatCapacityDeletesOldestContentAndKeepsEvents(t *testing.T)
 	oldSnapshot.SessionKey = HashSessionKey(userID, oldSnapshot.Protocol, "header:session-id", "capacity-old")
 	oldSnapshot.SessionSource = "client_session"
 	oldSnapshot.FullPrompt = strings.Repeat("o", 100)
-	oldEvent, err := repo.RecordBlocking(ctx, oldSnapshot, 1, integrationResult(EventPass), false)
+	oldEvent, err := repo.RecordBlocking(ctx, oldSnapshot, 1, integrationResult(EventCritical), false)
 	require.NoError(t, err)
+	require.NotZero(t, oldEvent.Snapshot.ChatRecordID)
 
 	newSnapshot := integrationSnapshot("capacity-new")
 	newSnapshot.UserID = userID
 	newSnapshot.SessionKey = HashSessionKey(userID, newSnapshot.Protocol, "header:session-id", "capacity-new")
 	newSnapshot.SessionSource = "client_session"
 	newSnapshot.FullPrompt = strings.Repeat("n", 30)
-	newEvent, err := repo.RecordBlocking(ctx, newSnapshot, 1, integrationResult(EventPass), false)
+	newEvent, err := repo.RecordBlocking(ctx, newSnapshot, 1, integrationResult(EventCritical), false)
 	require.NoError(t, err)
+	require.NotZero(t, newEvent.Snapshot.ChatRecordID)
 	_, err = db.ExecContext(ctx, `UPDATE prompt_audit_chat_records SET created_at=CASE WHEN id=$1 THEN NOW()-INTERVAL '2 minutes' ELSE NOW() END WHERE id IN ($1,$2)`, oldEvent.Snapshot.ChatRecordID, newEvent.Snapshot.ChatRecordID)
 	require.NoError(t, err)
 
