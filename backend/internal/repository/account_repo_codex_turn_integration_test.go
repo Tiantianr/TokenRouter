@@ -20,7 +20,13 @@ func TestCodexAccountTurnRepositoryCAS(t *testing.T) {
 	a := &service.Account{Name: "codex-turn-cas", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "fake-token"}, Extra: map[string]any{"codex_fingerprint_mode": "session", service.CodexAccountTurnExtraKey: map[string]any{"enabled": false, "revision": "v1"}}}
 	require.NoError(t, repo.Create(ctx, a))
-	t.Cleanup(func() { require.NoError(t, repo.Delete(ctx, a.ID)) })
+	t.Cleanup(func() {
+		// 本测试跨连接提交事务，必须清理自己的账号及单账号/批量 outbox，避免污染后续全局断言。
+		_, err := integrationDB.ExecContext(ctx, "DELETE FROM scheduler_outbox WHERE account_id = $1 OR payload -> 'account_ids' @> jsonb_build_array($1::bigint)", a.ID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx, "DELETE FROM accounts WHERE id = $1", a.ID)
+		require.NoError(t, err)
+	})
 	snapshot, err := repo.GetByID(ctx, a.ID)
 	require.NoError(t, err)
 	var before int
